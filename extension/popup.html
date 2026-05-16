@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Answer Bot</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app">
+    <!-- 顶部标题栏 -->
+    <header class="app-header">
+      <div class="brand">
+        <span class="logo-icon">✦</span>
+        <span class="title">AI Answer Bot</span>
+        <div class="status-badge" id="statusBadge">
+          <span class="status-dot" id="statusDot"></span>
+          <span class="status-text" id="statusText">等待开始</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="icon-btn" id="openTemplatesBtn" title="模板管理">
+          <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+        </button>
+        <button class="icon-btn" id="openSettingsBtn" title="API 设置">
+          <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- 主内容区域 -->
+    <main class="app-content">
+      <!-- 统计卡片 -->
+      <div class="stats-grid">
+        <div class="stat-card">
+          <span class="stat-value" id="questionCount">0</span>
+          <span class="stat-label">识别题目</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-value" id="answeredCount">0</span>
+          <span class="stat-label">已完成</span>
+        </div>
+      </div>
+
+      <!-- 操作步骤区 -->
+      <div class="steps-area">
+        <div class="action-row">
+          <button class="btn btn-primary btn-lg" id="scanBtn">
+            <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+            <span>扫描页面题目</span>
+          </button>
+          <button class="btn btn-dark btn-lg" id="startBtn" disabled>
+            <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+            <span id="startBtnText">开始自动答题</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 简要日志区域 -->
+      <div class="log-section">
+        <div class="section-header">
+          <span>运行日志</span>
+          <button class="btn-text" id="clearLog">清空</button>
+        </div>
+        <div class="log-container" id="logContent">
+          <div class="log-item log-info">
+            <span class="log-time">--:--</span>
+            <span class="log-msg">准备就绪，请先扫描题目</span>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- 设置浮层 (Modal) -->
+    <div class="modal" id="settingsModal">
+      <div class="modal-backdrop" id="closeSettingsBackdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>AI模型管理</h3>
+          <button class="icon-btn" id="closeSettingsBtn">
+            <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="model-list" id="modelList"></div>
+          <button class="btn btn-outline btn-block" id="addModelBtn">
+            <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+            <span>添加自定义模型</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 添加/编辑模型浮层 -->
+    <div class="modal" id="editModelModal">
+      <div class="modal-backdrop" id="closeEditBackdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="editModalTitle">添加模型</h3>
+          <button class="icon-btn" id="closeEditBtn">
+            <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="editName">模型名称</label>
+            <input type="text" id="editName" placeholder="我的模型">
+          </div>
+          <div class="form-group">
+            <label for="editBaseUrl">Base URL</label>
+            <input type="text" id="editBaseUrl" placeholder="https://api.openai.com/v1">
+          </div>
+          <div class="form-group">
+            <label for="editApiKey">API Key</label>
+            <div class="input-wrapper">
+              <input type="password" id="editApiKey" placeholder="sk-...">
+              <button class="toggle-visibility" id="toggleEditApiKey">
+                <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+              </button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="editModel">模型ID</label>
+            <input type="text" id="editModel" placeholder="gpt-4o-mini">
+          </div>
+          <div class="config-status" id="editStatus"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-primary btn-block" id="saveModelBtn">保存</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

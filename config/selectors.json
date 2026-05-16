@@ -1,0 +1,96 @@
+{
+  "_comment": "Unipus 页面选择器配置。若页面升级导致选择器失效，修改此文件即可。",
+
+  "domains": {
+    "login": "https://ucloud.unipus.cn/user/student",
+    "course": "https://ucloud.unipus.cn/user/student/mycourse",
+    "content_api": "https://ucontent.unipus.cn"
+  },
+
+  "storage": {
+    "token_key": "__token",
+    "token_field": "jwt",
+    "auth_header": "X-Annotator-Auth-Token"
+  },
+
+  "login": {
+    "username": "[name='username']",
+    "password": "[name='password']",
+    "agreement_checkbox_index": 1,
+    "submit_btn": ".btn.btn-login.btn-fill",
+    "captcha_input": "#pw-captchaCode",
+    "login_success_indicator": ["newIndex", "mycourse", "mypage"]
+  },
+
+  "course_page": {
+    "course_box": ".my_course_box",
+    "course_title": ".cc_course_intro_text",
+    "required_exercise_icon": ".icon-bixiu.iconCustumStyle.iconfont",
+    "exercise_icon": ".icon-lianxi.iconfont",
+    "env_bypass": ".layui-layer-btn0"
+  },
+
+  "exercise": {
+    "common": {
+      "dialog_close": "[class*='dialog-header-pc--close']",
+      "title_bar": "[class*='layoutHeaderStyle--menuList']",
+      "i_know_btn": ".iKnow",
+      "submit_btn": ".question-common-course-page .btn",
+      "next_btn": "[class*='submit-bar-pc--btn']",
+      "question_container": ".question-common-abs-question-container"
+    },
+
+    "_type_detection": {
+      "comment": "根据页面 CSS 类名判断题型",
+      "banked_cloze": ".question-abs-material-banked-cloze",
+      "single_choice": ".question-abs-material-single-choice",
+      "fill_blank": ".question-abs-material-blank-filling",
+      "translation": ".question-abs-material-translation",
+      "rewrite_sentence": ".question-abs-material-rewrite",
+      "grammar_fill": ".question-abs-material-grammar"
+    },
+
+    "banked_cloze": {
+      "word_options": ".option",
+      "blank_inputs": ".question-material-banked-cloze-scoop input[type='text']",
+      "material_area": ".question-material-banked-cloze-scoop",
+      "word_bank": ".question-material-banked-cloze-reply"
+    },
+
+    "single_choice": {
+      "question_items": ".questions--questionDefault-2XLzl",
+      "radio_input": "input[value='{choice}']",
+      "option_label": "label"
+    },
+
+    "fill_blank": {
+      "blank_inputs": "input[type='text'], input.ant-input",
+      "blank_textareas": "textarea, textarea.ant-input",
+      "question_items": "[class*='question-abs-material'] [class*='item']"
+    },
+
+    "translation": {
+      "textarea": "textarea, textarea.ant-input",
+      "input": "input[type='text'], input.ant-input",
+      "question_area": "[class*='translation']"
+    },
+
+    "rewrite_sentence": {
+      "input": "input[type='text'], input.ant-input",
+      "textarea": "textarea, textarea.ant-input",
+      "question_items": "[class*='rewrite'] [class*='item']"
+    },
+
+    "grammar_fill": {
+      "blank_inputs": "input[type='text'], input.ant-input",
+      "question_items": "[class*='grammar'] [class*='item']"
+    }
+  },
+
+  "feedback": {
+    "comment": "提交后页面视觉反馈的选择器，用于 DOM 路线判断正误",
+    "correct_highlight": "[class*='correct'], [class*='right'], [class*='success']",
+    "wrong_highlight": "[class*='wrong'], [class*='error'], [class*='incorrect']",
+    "score_display": "[class*='score'], [class*='grade']"
+  }
+}

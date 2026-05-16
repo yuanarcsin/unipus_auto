@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "AI自动答题助手",
+  "version": "1.0.0",
+  "description": "智能识别网页题目，通过AI自动答题",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "declarativeNetRequest",
+    "sidePanel"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_icon": {
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "128": "icons/icon128.png"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "modules/site-matcher.js",
+        "modules/template-manager.js",
+        "modules/bank.js",
+        "modules/scanner-enhanced.js",
+        "content.js"
+      ],
+      "css": ["content.css"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["templates/*.json"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

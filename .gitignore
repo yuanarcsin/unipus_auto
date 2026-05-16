@@ -1,1 +1,8 @@
-./pre_test/*
+__pycache__/
+*.pyc
+diagnose_output/
+error_log.txt
+.env
+pre_test/
+account.json
+config/account.json

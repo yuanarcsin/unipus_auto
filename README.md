@@ -1,62 +1,75 @@
-## AutoUnipus
-2025/11/30
+# Unipus Auto — U 校园智能答题助手
 
-本项目已开源,由于学业繁忙后续可能不再更新,有意向者可自行研究学习代码
+基于大模型 API 的 U 校园（Unipus）自动答题工具，支持**浏览器扩展**和**独立脚本**两种方式。
 
-**项目简述:**
+## 功能
 
-本项目基于Microsoft开发的playwright库, 运用Python和部分Javascript编写而成, 程序预设了两种运行模式：自动模式(Automode) 和 辅助模式(Assistmode).
+- 识别题型：选词填空、单选、多选、填空、翻译、句子改写
+- 调用 DeepSeek / OpenAI 兼容 API 获取答案
+- 答案填入页面（辅助模式，不自动提交）
+- 题库缓存：做过自动存，再遇到直接复用
+- Unipus 站点模板优先匹配，识别更快更准
 
-**功能介绍:**
+## 快速开始
 
-- 启动时自动登录unipus并跳转至网课网站
-- 在**自动模式**下, 程序将自行识别"必修"练习题,并依此进行作答,会**自动进行提交;**
-- 在**辅助模式**下, 你只需进入任意一个题目界面, 在程序界面按下Enter键,程序会自动选中正确答案, 但**不会直接提交;**
-- 程序获取的答案正确率为100%
+### 浏览器扩展（推荐）
 
-**注意事项:**
+1. Edge 打开 `edge://extensions`（Chrome: `chrome://extensions`）
+2. 开启"开发人员模式"
+3. "加载解压缩的扩展" → 选择 `extension/` 文件夹
+4. 点扩展图标 → 设置 → 填入 API Key → 保存
+5. 打开 U 校园练习页 → 点扩展 → 扫描 → 开始答题
 
-1. 使用前须填写好**account.json**文件
-   
+### 独立脚本
 
-![image](https://github.com/CXRunfree/AutoUnipus/assets/79365257/73a373f8-d656-4cd2-8810-ab8f6d09a260)
+```bash
+set DEEPSEEK_API_KEY=sk-xxxx
+python test_llm_solve.py
+```
 
+## 文件结构
 
-   **各项参数含义:**
+```
+├── AutoUnipus.py           # 原 Playwright 版主入口
+├── test_llm_solve.py       # LLM 独立答题脚本
+├── test_run.py             # route 劫持穷举测试
+├── test_auto_bruteforce.py # 自动穷举原型
+├── test_solve_done.py      # 已验证的穷举原型
+├── config/selectors.json   # Unipus DOM 选择器
+├── utils/                  # 工具模块
+├── res/                    # 资源
+├── account.json            # 账户配置
+└── extension/              # 浏览器扩展
+    ├── manifest.json       # MV3 配置
+    ├── background.js       # AI API 调用
+    ├── content.js          # 题目扫描 + 答案填入
+    ├── popup.html/js       # 控制面板
+    ├── modules/
+    │   ├── bank.js         # 题库存储
+    │   └── ...
+    └── templates/
+        └── unipus.json     # Unipus 站点模板
+```
 
-   `username:`	填写账号;
+## 已知问题
 
-   `password:`	填写密码;
+- 选词填空填入操作偶有偏差，需人工核对
+- 单选/多选题 DOM 选择器未充分测试
+- 翻译/改写题 LLM 答案质量依赖 prompt 调优
+- 题库管理界面未完成
+- 提交后未自动检测正误反馈
 
-   `Automode:`	指定程序运行模式, `true`为自动模式, `false`为辅助模式
+## 来源与协议
 
-   ​						(注意此项不加双引号,字母小写)
+本项目基于以下开源项目：
 
-   `Driver:`		指定程序启动的浏览器,可选项为`Edge`和`Chrome` (Google浏览器)
+| 项目 | 作者 | 协议 |
+|---|---|---|
+| [AutoUnipus](https://github.com/CXRunfree/AutoUnipus) | CXRunfree | BSD 3-Clause |
+| [AI-ANSWER-ASSISTANT](https://github.com/rehuan/AI-ANSWER-ASSISTANT) | rehuan | GPL-3.0 |
 
-   ​						注意此项首字母大写,默认启动Windows自带的Edge; 若使用Google浏览器, 请确保安装在**默认路径;**
+扩展部分（`extension/`）基于 AI-ANSWER-ASSISTANT 改造。因包含 GPL-3.0 代码，**整体项目遵循 GPL-3.0**。[LICENSE](LICENSE) | [LICENSE.BSD](LICENSE.BSD)
 
-   `class_url:`	指定程序要进行自动答题的网课链接, 当且仅当**自动模式**启动时, 需要填写此项;
+## 声明
 
-   示范链接:
-
-   ```
-   https://u.unipus.cn/user/student/mycourse/courseCatalog?courseId=...&school_id=...&eccId=...&classId=...&coursetype=0
-   ```
-
-3. 登录界面如果出现图形验证码, 请手动输入 (验证码太抽象了, 接入了ai识别也不好使)
-
-4. 程序目前仅支持**单选题**作答, 若出现特殊类型题目或者页面不存在题目时将**不会提交作答**;
-
-5. 假如答题中途网站提示"检测到异常行为,请进行安全验证"不必担心, 只需手动验证即可
-
-   如果不希望出现此提示, 你可以选择使用**辅助模式**, 能够一定程度减小出现的概率.
-
-
-**声明:**
-
--  本项目只能用于学习和研究计算机原理，不得用于非法用途。
-
-#### 
-
-
+本项目仅用于学习研究，不得用于非法用途。
