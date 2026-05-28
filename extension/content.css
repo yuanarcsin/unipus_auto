@@ -302,3 +302,218 @@
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+
+/* ========== 答案详情面板 ========== */
+
+/* 触发按钮 */
+.ai-answer-toggle-btn {
+  position: fixed;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--ai-primary);
+  color: white;
+  border: none;
+  cursor: pointer;
+  z-index: 2147483646;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  box-shadow: var(--ai-shadow-lg);
+  transition: all 0.2s;
+  opacity: 0.85;
+}
+.ai-answer-toggle-btn:hover {
+  transform: translateY(-50%) scale(1.08);
+  opacity: 1;
+}
+
+/* 详情面板 */
+.ai-answer-detail-panel {
+  position: fixed;
+  right: 0;
+  top: 0;
+  width: 340px;
+  max-width: 40vw;
+  height: 100vh;
+  background: var(--ai-bg);
+  z-index: 2147483647;
+  box-shadow: -4px 0 24px rgba(0,0,0,0.08);
+  display: flex;
+  flex-direction: column;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  transform: translateX(100%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.ai-answer-detail-panel.open {
+  transform: translateX(0);
+}
+
+.ai-answer-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--ai-border);
+  flex-shrink: 0;
+}
+.ai-answer-panel-title {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--ai-text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ai-answer-panel-stats {
+  font-size: 12px;
+  color: var(--ai-text-light);
+  background: #f4f4f5;
+  padding: 2px 10px;
+  border-radius: 10px;
+}
+.ai-answer-panel-close {
+  background: none;
+  border: none;
+  font-size: 20px;
+  color: var(--ai-text-light);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.ai-answer-panel-close:hover {
+  background: #f4f4f5;
+  color: var(--ai-text);
+}
+
+.ai-answer-panel-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 单条答案 */
+.ai-answer-item {
+  background: #fafafa;
+  border: 1px solid var(--ai-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+.ai-answer-item.answered {
+  border-left: 3px solid var(--ai-success);
+  background: #f0fdf6;
+}
+.ai-answer-item.pending {
+  border-left: 3px solid var(--ai-warning);
+}
+
+.ai-answer-item-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.ai-answer-item-index {
+  font-weight: 600;
+  color: var(--ai-text);
+  font-size: 13px;
+}
+.ai-answer-item-type {
+  font-size: 11px;
+  color: var(--ai-text-light);
+  background: #e4e4e7;
+  padding: 1px 8px;
+  border-radius: 3px;
+}
+.ai-answer-item-status {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+}
+.ai-answer-item-status.done { color: var(--ai-success); }
+.ai-answer-item-status.wait { color: var(--ai-warning); }
+
+.ai-answer-item-question {
+  font-size: 12px;
+  color: var(--ai-text-light);
+  line-height: 1.5;
+  margin-bottom: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ai-answer-item-answer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e4e4e7;
+}
+.ai-answer-label {
+  font-size: 12px;
+  color: var(--ai-text-light);
+}
+.ai-answer-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ai-primary);
+  flex: 1;
+}
+
+/* 选项标签 */
+.ai-answer-item-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.ai-opt-pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  background: #f4f4f5;
+  color: #71717a;
+  border: 1px solid #e4e4e7;
+}
+.ai-opt-pill.correct {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #86efac;
+  font-weight: 600;
+}
+
+/* 复制按钮 */
+.ai-copy-btn {
+  padding: 2px 10px;
+  font-size: 11px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #fff;
+  color: #52525b;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.ai-copy-btn:hover {
+  background: #f4f4f5;
+  border-color: #a1a1aa;
+}
+.ai-copy-btn.copied {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #86efac;
+}

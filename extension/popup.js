@@ -5,7 +5,6 @@ const statusText = document.getElementById("statusText");
 const questionCount = document.getElementById("questionCount");
 const answeredCount = document.getElementById("answeredCount");
 
-const scanBtn = document.getElementById("scanBtn");
 const startBtn = document.getElementById("startBtn");
 const startBtnText = document.getElementById("startBtnText");
 
@@ -69,7 +68,6 @@ document.addEventListener("DOMContentLoaded", async () => {
           addLog("info", "检测到正在运行的任务");
         } else if (response.questionCount > 0) {
           hasScanned = true;
-          startBtn.disabled = false;
           addLog("info", "检测到已扫描题目，可以开始");
         }
       }
@@ -393,7 +391,10 @@ async function injectContentScript(tabId) {
       files: [
         "modules/site-matcher.js",
         "modules/template-manager.js",
+        "modules/bank.js",
         "modules/scanner-enhanced.js",
+        "modules/unipus-api.js",
+        "modules/welearn-api.js",
         "content.js",
       ],
     });
@@ -408,8 +409,19 @@ async function injectContentScript(tabId) {
   }
 }
 
-// 1. Scan
-scanBtn.addEventListener("click", async () => {
+// 自动答题（一键：扫描 + 答题）
+startBtn.addEventListener("click", async () => {
+  if (isRunning) {
+    // 暂停
+    setRunningState(false);
+    addLog("warning", "已暂停答题");
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tabs[0]) {
+      chrome.tabs.sendMessage(tabs[0].id, { action: "stop" });
+    }
+    return;
+  }
+
   const activeModel = await getActiveModel();
   const config = {
     baseUrl: activeModel.baseUrl,
@@ -417,21 +429,14 @@ scanBtn.addEventListener("click", async () => {
     model: activeModel.model,
   };
 
-  addLog("info", "正在扫描题目...");
-  updateStatus("running", "扫描中...");
-  scanBtn.disabled = true;
-
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tabs[0]) {
     addLog("error", "无法获取当前标签页");
-    updateStatus("error", "连接失败");
-    scanBtn.disabled = false;
     return;
   }
 
   const tab = tabs[0];
 
-  // 检查是否是系统页面
   if (
     !tab.url ||
     tab.url.startsWith("chrome://") ||
@@ -439,121 +444,41 @@ scanBtn.addEventListener("click", async () => {
     tab.url.startsWith("edge://") ||
     tab.url.startsWith("about:")
   ) {
-    addLog("error", "请切换到有题目的网页再扫描");
-    updateStatus("error", "系统页面");
-    scanBtn.disabled = false;
+    addLog("error", "请切换到有题目的网页");
     return;
   }
 
-  // 确保 content script 已注入
   const injected = await ensureContentScriptInjected(tab.id);
   if (!injected) {
     addLog("error", "无法连接到页面，请刷新页面后重试");
-    updateStatus("error", "连接失败");
-    scanBtn.disabled = false;
     return;
   }
 
-  chrome.tabs.sendMessage(tab.id, { action: "scan", config }, (response) => {
-    scanBtn.disabled = false;
-
-    if (chrome.runtime.lastError) {
-      addLog("error", "连接失败，请刷新页面后重试");
-      updateStatus("error", "连接失败");
-      return;
-    }
-
-    if (response && response.success) {
-      questionCount.textContent = response.count;
-      hasScanned = true;
-      startBtn.disabled = false;
-      addLog("success", `扫描完成: ${response.count} 题`);
-      updateStatus("ready", "扫描完成");
-    } else {
-      addLog("warning", response?.message || "未发现题目");
-      updateStatus("ready", "未发现题目");
-    }
-  });
-});
-
-// 2. Start/Pause Toggle
-startBtn.addEventListener("click", async () => {
-  if (!hasScanned && !isRunning) return;
-
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tabs[0]) {
-    addLog("error", "无法获取当前标签页");
-    return;
-  }
-
-  const tab = tabs[0];
-
-  if (isRunning) {
-    // Pause/Stop
-    setRunningState(false);
-    addLog("warning", "已暂停答题");
-    chrome.tabs.sendMessage(tab.id, { action: "stop" });
-  } else {
-    // 检查是否是系统页面
-    if (
-      !tab.url ||
-      tab.url.startsWith("chrome://") ||
-      tab.url.startsWith("chrome-extension://") ||
-      tab.url.startsWith("edge://") ||
-      tab.url.startsWith("about:")
-    ) {
-      addLog("error", "请切换到有题目的网页");
-      return;
-    }
-
-    // 确保 content script 已注入
-    const injected = await ensureContentScriptInjected(tab.id);
-    if (!injected) {
-      addLog("error", "无法连接到页面，请刷新页面后重试");
-      return;
-    }
-
-    // Start
-    const activeModel = await getActiveModel();
-    const config = {
-      baseUrl: activeModel.baseUrl,
-      apiKey: activeModel.apiKey,
-      model: activeModel.model,
-    };
-
-    setRunningState(true);
-    addLog("info", "🚀 开始自动答题");
-    chrome.tabs.sendMessage(
-      tab.id,
-      {
-        action: "start",
-        config: config,
-      },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          setRunningState(false);
-          addLog("error", "连接中断，请刷新页面后重试");
-        }
+  setRunningState(true);
+  addLog("info", "🚀 开始自动答题");
+  chrome.tabs.sendMessage(
+    tab.id,
+    { action: "start", config },
+    (response) => {
+      if (chrome.runtime.lastError) {
+        setRunningState(false);
+        addLog("error", "连接中断，请刷新页面后重试");
       }
-    );
-  }
+    }
+  );
 });
 
 function setRunningState(active) {
   isRunning = active;
   if (active) {
-    startBtn.disabled = false;
     startBtnText.textContent = "暂停答题";
-    startBtn.classList.remove("btn-dark");
+    startBtn.classList.remove("btn-primary");
     startBtn.classList.add("btn-warning");
-    scanBtn.disabled = true;
     updateStatus("running", "答题中...");
   } else {
-    startBtn.disabled = !hasScanned; // Keep enabled if we have scanned
-    startBtnText.textContent = "开始自动答题";
+    startBtnText.textContent = "自动答题";
     startBtn.classList.remove("btn-warning");
-    startBtn.classList.add("btn-dark");
-    scanBtn.disabled = false;
+    startBtn.classList.add("btn-primary");
     updateStatus("ready", "就绪");
   }
 }

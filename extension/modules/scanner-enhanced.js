@@ -94,10 +94,13 @@
           }
         }
       } else {
-        // 通过选择器判断类型
-        for (const [type, config] of Object.entries(questionTypes)) {
-          if (type === "detectByAttribute") continue;
-          if (element.matches(config.container)) {
+        // 通过选择器判断类型（检查容器自身或子元素）
+        const typeKeys = Object.keys(questionTypes).filter(k => k !== 'detectByAttribute' && k !== 'detectByClass' && typeof questionTypes[k] === 'object');
+        for (const type of typeKeys) {
+          const config = questionTypes[type];
+          const sel = config.container;
+          if (!sel) continue;
+          if (element.matches(sel) || element.querySelector(sel)) {
             questionType = type;
             typeSelectors = config;
             break;
@@ -106,7 +109,7 @@
       }
 
       if (!questionType) {
-        console.warn("[EnhancedScanner] 无法确定题目类型:", element);
+        console.warn("[EnhancedScanner] 无法确定题目类型:", element.className);
         return null;
       }
 
@@ -128,15 +131,32 @@
       }
 
       // 根据类型提取选项或输入框
-      if (questionType === "single" || questionType === "multiple") {
+      if (questionType === "single" || questionType === "multiple" || questionType === "choice" || questionType === "single_choice" || questionType === "multiple_choice") {
         question.options = this._parseOptions(element, typeSelectors, template);
-      } else if (questionType === "fill") {
+      } else if (questionType === "banked_cloze") {
+        // 提取词库
+        if (typeSelectors.wordBank) {
+          const wordBankEl = element.querySelector(typeSelectors.wordBank);
+          if (wordBankEl) {
+            const wordEls = wordBankEl.querySelectorAll(typeSelectors.wordOptions);
+            question.wordBank = Array.from(wordEls).map(el => el.textContent.trim()).filter(w => w);
+          }
+        }
+        question.inputs = this._parseInputs(element, { inputs: typeSelectors.blanks });
+      } else if (questionType === "fill" || questionType === "blank" || questionType === "fill_blank") {
         question.inputs = this._parseInputs(element, typeSelectors);
+      }
+
+      // 过滤聚合容器（选项数异常多的不是单题，跳过）
+      if (question.options && question.options.length > 10) {
+        console.log(`[EnhancedScanner] 跳过聚合容器（${question.options.length}个选项）`);
+        return null;
       }
 
       console.log(
         `[EnhancedScanner] 题目${index + 1} [${questionType}]:`,
-        question.text.substring(0, 30) + "..."
+        question.text.substring(0, 30) + "...",
+        `options:${question.options?.length || 0} inputs:${question.inputs?.length || 0} wordBank:${question.wordBank?.length || 0}`
       );
 
       return question;
@@ -148,35 +168,36 @@
      */
     _parseOptions(container, typeSelectors, template) {
       const options = [];
-      const optionElements = container.querySelectorAll(
-        typeSelectors.optionItem
-      );
 
-      optionElements.forEach((optionEl, idx) => {
-        // 查找input元素
-        const input = optionEl.querySelector(typeSelectors.optionInput);
-        if (!input) return;
-
-        // 查找label文本
-        const labelEl = optionEl.querySelector(typeSelectors.optionLabel);
-        let optionText = labelEl ? labelEl.textContent.trim() : "";
+      // 直接查找所有 input 元素
+      const inputs = container.querySelectorAll(typeSelectors.optionInput);
+      inputs.forEach((input, idx) => {
+        // 查找关联的 label 文本
+        let labelEl = null;
+        if (typeSelectors.optionLabel) {
+          labelEl = input.closest(typeSelectors.optionLabel) ||
+                    (input.id ? container.querySelector(`label[for="${input.id}"]`) : null) ||
+                    input.parentElement;
+        } else {
+          labelEl = (input.id ? container.querySelector(`label[for="${input.id}"]`) : null) ||
+                    input.closest('label') ||
+                    input.parentElement;
+        }
+        let optionText = labelEl ? labelEl.textContent.trim() : '';
 
         // 提取选项字母
-        let optionLabel = String.fromCharCode(65 + idx); // 默认A, B, C...
+        let optionLabel = String.fromCharCode(65 + idx);
 
         if (typeSelectors.optionLabelPattern && optionText) {
           const pattern = new RegExp(typeSelectors.optionLabelPattern);
           const match = optionText.match(pattern);
           if (match && match[1]) {
             optionLabel = match[1];
-            // 移除前缀
             optionText = optionText.substring(match[0].length).trim();
           }
         }
 
-        // 生成精确选择器
         const selector = this._generateSelector(input, template);
-
         options.push({
           label: optionLabel,
           text: optionText,
@@ -318,5 +339,5 @@
   // 导出到全局
   window.EnhancedScanner = EnhancedScanner;
 
-  console.log("[EnhancedScanner] 模块已加载");
+  console.log("[EnhancedScanner] 模块已加载 v2.1");
 })();

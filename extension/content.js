@@ -69,7 +69,18 @@
         return true; // 保持消息通道开放用于异步响应
       case "start":
         config = message.config;
-        startAnswering();
+        // 始终重新扫描（SPA 页面可能已跳转）
+        questions = [];
+        answeredCount = 0;
+        aiDetectedSelectors = null;
+        handleScan((scanResult) => {
+          if (scanResult && scanResult.success) {
+            startAnswering();
+          } else {
+            sendLog("warning", scanResult?.message || "扫描未发现题目");
+            sendComplete();
+          }
+        });
         sendResponse({ success: true });
         break;
       case "stop":
@@ -87,6 +98,98 @@
     return true;
   });
 
+  // 从 WeLearn 解析结果创建题目对象
+  function createWelearnQuestions(answers) {
+    const typeMap = {
+      single: "single",
+      blank_choice: "fill",
+      fill: "fill",
+      tof: "single",
+    };
+
+    const qs = [];
+    let tabName = "";
+
+    answers.forEach((a, i) => {
+      if (a.tabName && a.tabName !== tabName) {
+        tabName = a.tabName;
+      }
+
+      const qtype = typeMap[a.type] || "single";
+      const q = {
+        index: i,
+        type: qtype,
+        text: (tabName ? "[" + tabName + "] " : "") + (a.questionText || ""),
+        options: [],
+        inputs: [],
+        answered: false,
+        answer: a.answers[0],
+        _welearnAnswer: true,
+      };
+
+      // 为选择题带上选项文本（从数据 HTML 中提取的答案即选项内容）
+      if (qtype === "single" && a.answers[0]) {
+        q.options = [{
+          label: a.answers[0],
+          text: a.answers[0],
+        }];
+      }
+
+      qs.push(q);
+    });
+
+    return qs;
+  }
+
+  // 将 U校园 API 答案按顺序合并到题目列表
+  function mergeApiAnswers(questions, apiAnswers) {
+    const typeMap = {
+      single: "single",
+      single_choice: "single",
+      choice: "single",
+      multiple: "multiple",
+      fill: "fill",
+      fill_blank: "fill",
+      blank: "fill",
+      banked_cloze: "banked_cloze",
+      translation: "translation",
+      rewrite_sentence: "rewrite_sentence",
+      grammar_fill: "grammar_fill",
+      short_answer: "fill",
+    };
+
+    questions.forEach((q, i) => {
+      if (i >= apiAnswers.length) return;
+      const api = apiAnswers[i];
+      if (!api.answers || api.answers.length === 0) return;
+
+      const mappedType = typeMap[q.type] || q.type;
+
+      switch (mappedType) {
+        case "single":
+          // U校园可能是选项字母或序号
+          q.answer = api.answers[0];
+          break;
+        case "multiple":
+          q.answer = api.answers;
+          break;
+        case "fill":
+        case "translation":
+        case "rewrite_sentence":
+        case "grammar_fill":
+          q.answer = api.answers;
+          break;
+        case "banked_cloze":
+          q.answer = api.answers;
+          break;
+        default:
+          // 未知类型也填充，让后续逻辑处理
+          q.answer = api.answers;
+      }
+      q._unipusAnswer = true;
+    });
+  }
+
   // 处理扫描请求
   async function handleScan(sendResponse) {
     if (!config) {
@@ -96,10 +199,45 @@
 
     // 步骤1: 尝试匹配站点模板
     sendLog("info", "正在匹配站点模板...");
+    // 确保模板已初始化（避免竞态）
+    if (window.templateManager && !window.templateManager._initialized) {
+      await window.templateManager.init();
+      window.templateManager._initialized = true;
+    }
     const template = window.siteMatcher.matchTemplate(window.location.href);
 
     if (template) {
       sendLog("info", `已匹配到站点模板: ${template.siteName}`);
+
+      // WeLearn 分层策略：从数据 HTML 直取正解
+      if (template.siteId === "welearn" && window.welearnAPI) {
+        sendLog("info", "检测到 WE Learn 页面，从数据 HTML 获取正解...");
+        try {
+          const wlResult = await window.welearnAPI.getAnswers();
+          if (wlResult && wlResult.answers && wlResult.answers.length > 0) {
+            questions = createWelearnQuestions(wlResult.answers);
+            answeredCount = 0;
+            populateAnswerPanel();
+            updateStats();
+            // iframe 内自动点击正确答案（不提交）
+            if (window.welearnAPI.isInIframe()) {
+              const fillResult = window.welearnAPI.autoFillAnswers(wlResult.answers);
+              if (fillResult && fillResult.clicked > 0) {
+                sendLog("success", `已自动填入 ${fillResult.clicked}/${fillResult.total} 题`);
+              }
+            }
+            await window.templateManager.updateStats(template.siteId, "success");
+            sendLog("success", `从数据 HTML 获取到 ${wlResult.answers.length} 个答案`);
+            sendResponse({ success: true, count: questions.length, message: "" });
+            return;
+          } else {
+            sendLog("warning", "WE Learn 数据 HTML 未解析到答案，回退到 AI 模式");
+          }
+        } catch (e) {
+          sendLog("warning", `WE Learn 解析失败: ${e.message}，回退到 AI 模式`);
+          await window.templateManager.updateStats(template.siteId, "fail");
+        }
+      }
 
       try {
         // 使用模板扫描
@@ -110,14 +248,57 @@
           // 模板扫描成功
           questions = result.questions;
           answeredCount = 0;
+
+          // U校园分层策略：从 API 直取服务端正解
+          if (template.siteId === "unipus" && window.unipusAPI) {
+            sendLog("info", "检测到 U校园页面，尝试获取服务端正解...");
+            const pageInfo = window.unipusAPI.extractPageInfo();
+            if (
+              pageInfo &&
+              pageInfo.courseInstanceId &&
+              pageInfo.taskId
+            ) {
+              const apiAnswers = await window.unipusAPI.getAnswersForTask(
+                pageInfo.courseInstanceId,
+                pageInfo.taskId,
+                pageInfo.openId
+              );
+              if (apiAnswers && apiAnswers.length > 0) {
+                mergeApiAnswers(questions, apiAnswers);
+                sendLog(
+                  "success",
+                  `从 U校园 API 获取到 ${apiAnswers.length} 道题的正解`
+                );
+              } else {
+                sendLog(
+                  "warning",
+                  "U校园 API 未返回答案，回退到 AI 模式"
+                );
+              }
+            } else {
+              sendLog(
+                "warning",
+                `未能提取页面信息 (courseInstanceId:${pageInfo?.courseInstanceId}, taskId:${pageInfo?.taskId})，回退到 AI 模式`
+              );
+            }
+          }
+
+          // 过滤聚合容器（选项数 > 10）并更新面板
+          const before = questions.length;
+          questions = questions.filter(q => !q.options || q.options.length <= 10);
+          if (before !== questions.length) {
+            sendLog("info", `已过滤 ${before - questions.length} 个聚合容器`);
+          }
+          populateAnswerPanel();
+
           updateStats();
 
-          sendLog("success", `使用模板扫描成功，发现 ${result.count} 道题目`);
+          sendLog("success", `使用模板扫描成功，有效题目 ${questions.length} 道`);
 
           // 更新模板统计
           await window.templateManager.updateStats(template.siteId, "success");
 
-          sendResponse({ success: true, count: result.count, message: "" });
+          sendResponse({ success: true, count: questions.length, message: "" });
           return;
         } else {
           // 模板扫描失败，回退到AI分析
@@ -407,7 +588,7 @@
     let html = clone.innerHTML;
     html = html.replace(/\s+/g, " ").replace(/>\s+</g, "><");
 
-    if (html.length > 30000) {
+    if (html.length > 15000) {
       const mainSelectors = [
         "main",
         "article",
@@ -427,7 +608,7 @@
       }
     }
 
-    if (html.length > 30000) {
+    if (html.length > 15000) {
       html = html.substring(0, 30000) + "... [内容已截断]";
     }
 
@@ -447,7 +628,7 @@
   }
 
   // 根据页面内容尝试提取候选题目块，显著减少发送给AI的数据量
-  function getCandidateQuestionBlocks(maxBlocks = 40) {
+  function getCandidateQuestionBlocks(maxBlocks = 20) {
     const candidateSet = new Set();
 
     function addCandidate(el) {
@@ -487,7 +668,7 @@
     const candidates = Array.from(candidateSet).slice(0, maxBlocks);
     return candidates
       .map((el) => {
-        const text = cleanText(el.textContent || "").substring(0, 400);
+        const text = cleanText(el.textContent || "").substring(0, 200);
         return {
           text,
           html: buildSimplifiedBlockHTML(el),
@@ -714,6 +895,7 @@ ${payload}`;
     }
 
     sendLog("info", `开始答题，共 ${questions.length} 道题目`);
+    populateAnswerPanel();
 
     for (let i = 0; i < questions.length; i++) {
       if (!isRunning) {
@@ -760,6 +942,7 @@ ${payload}`;
           question.explanation = answer.explanation;
           await applyAnswerDirectly(question);
           question.answered = true;
+          updateAnswerItemStatus(i, true);
           answeredCount++;
           updateStats();
           // 发送统计
@@ -903,7 +1086,9 @@ ${payload}`;
 
   // 直接应用答案（使用AI返回的选择器）
   async function applyAnswerDirectly(question) {
-    switch (question.type) {
+    // 标准化题型名（模板识别名 → 内部名）
+    const qtype = normalizeQuestionType(question.type);
+    switch (qtype) {
       case "single":
         await applySingleAnswerDirectly(question);
         break;
@@ -922,30 +1107,51 @@ ${payload}`;
     }
   }
 
+  // 题型名标准化
+  function normalizeQuestionType(type) {
+    const map = {
+      single_choice: "single",
+      multiple_choice: "multiple",
+      choice: "single",
+      fill_blank: "fill",
+      blank_filling: "fill",
+      blank: "fill",
+    };
+    return map[type] || type;
+  }
+
   // 单选题 - 直接点击对应选项
   async function applySingleAnswerDirectly(question) {
-    const answerLetter = String(question.answer).toUpperCase();
+    const answerRaw = String(question.answer).trim();
+    const answerUpper = answerRaw.toUpperCase();
 
+    // 尝试按字母匹配
     for (const option of question.options) {
-      if (option.label.toUpperCase() === answerLetter) {
-        // 优先使用已解析的element
-        let element = option.element;
-
-        // 如果element无效，尝试重新查询
-        if (!element && option.selector) {
-          element = safeQuerySelector(option.selector);
-        }
-
-        if (element) {
-          await clickElement(element);
-          console.log(`[AI答题助手] 单选已点击: ${option.label}`);
-        } else {
-          console.warn(
-            `[AI答题助手] 找不到选项元素: ${option.label}, selector: ${option.selector}`
-          );
-        }
-        break;
+      if (option.label.toUpperCase() === answerUpper) {
+        await clickOptionElement(option);
+        return;
       }
+    }
+
+    // 回退：按数字索引匹配
+    const idx = parseInt(answerRaw);
+    if (!isNaN(idx) && idx >= 0 && idx < question.options.length) {
+      await clickOptionElement(question.options[idx]);
+      return;
+    }
+
+  }
+
+  async function clickOptionElement(option) {
+    let element = option.element;
+    if (!element && option.selector) {
+      element = safeQuerySelector(option.selector);
+    }
+    if (element) {
+      await clickElement(element);
+      console.log(`[AI答题助手] 单选已点击: ${option.label}`);
+    } else {
+      console.warn(`[AI答题助手] 找不到选项元素: ${option.label}, selector: ${option.selector}`);
     }
   }
 
@@ -986,7 +1192,7 @@ ${payload}`;
     }
   }
 
-  // 填空题 - 填写答案
+  // 填空题 - 填写答案（每个空填对应的答案）
   async function applyFillAnswerDirectly(question) {
     let answers = question.answer;
 
@@ -995,78 +1201,100 @@ ${payload}`;
       answers = [answers];
     }
 
-    // 获取第一个输入框
-    let inputElement = null;
-
+    // 解析输入框列表
+    const inputElements = [];
     for (const inputInfo of question.inputs) {
       let element = inputInfo.element;
       if (!element && inputInfo.selector) {
         element = safeQuerySelector(inputInfo.selector);
       }
       if (element) {
-        inputElement = element;
-        break;
+        inputElements.push(element);
       }
     }
 
-    if (!inputElement) {
+    if (inputElements.length === 0 && question.inputs?.length > 0) {
+    }
+
+    if (inputElements.length === 0) {
       console.warn(`[AI答题助手] 找不到填空题输入框`);
       return;
     }
 
-    // 将所有答案合并为一个字符串填入同一个输入框
-    // 如果只有一个答案，直接使用；多个答案用中文分号 "；" 分隔
-    const combinedAnswer =
-      answers.length === 1
-        ? String(answers[0])
-        : answers.map((a) => String(a)).join("；");
-
-    await fillInput(inputElement, combinedAnswer);
-    console.log(`[AI答题助手] 填空已填写: ${combinedAnswer}`);
+    // 每个空填对应答案
+    for (let i = 0; i < inputElements.length; i++) {
+      const val = i < answers.length ? String(answers[i]) : "";
+      await fillInput(inputElements[i], val);
+      await sleep(100);
+    }
+    console.log(`[AI答题助手] 填空已填写: ${answers.join(', ')}`);
   }
 
   // 选词填空题 - 点击选项词 → 点击对应的空
   async function applyBankedClozeAnswer(question) {
     let answers = question.answer;
     if (!Array.isArray(answers)) { answers = [answers]; }
-    const blanks = document.querySelectorAll('[class*="banked-cloze-scoop"] input');
-    const options = document.querySelectorAll('.option');
+
+    // 使用 question 已解析的 inputs（空位）
+    const blanks = question.inputs
+      .map(inp => inp.element || (inp.selector ? safeQuerySelector(inp.selector) : null))
+      .filter(Boolean);
+
 
     for (let i = 0; i < Math.min(answers.length, blanks.length); i++) {
       const word = String(answers[i]).trim();
-      for (const opt of options) {
-        if (opt.innerText.trim() === word && opt.offsetParent) {
-          opt.click();
-          await sleep(150);
+      // 模拟真实点击：找到页面上匹配的候选词元素
+      const allOptionEls = document.querySelectorAll('.option');
+      for (const opt of allOptionEls) {
+        if (opt.textContent.trim() === word) {
+          // 完整鼠标事件序列（SPA框架兼容）
+          opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+          opt.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+          opt.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          await sleep(200);
           break;
         }
       }
-      if (i < blanks.length) {
-        blanks[i].click();
-        await sleep(150);
-        blanks[i].dispatchEvent(new Event('input', { bubbles: true }));
-        blanks[i].dispatchEvent(new Event('change', { bubbles: true }));
-      }
+      // 点击对应的空位
+      const blank = blanks[i];
+      blank.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      blank.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      blank.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      await sleep(150);
+      blank.dispatchEvent(new Event('input', { bubbles: true }));
+      blank.dispatchEvent(new Event('change', { bubbles: true }));
     }
     console.log('[AI答题助手] 选词填空已填入: ' + answers.join(', '));
   }
 
-  // 填写输入框
+  // 填写输入框（兼容 React/Vue 受控组件）
   async function fillInput(element, value) {
+    // 聚焦
     element.focus();
     await sleep(50);
 
-    // 清空现有值
-    element.value = "";
+    // React 受控组件：通过原生 setter 触发框架响应
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, 'value'
+    ).set;
+    const nativeTextAreaSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype, 'value'
+    ).set;
+    const setter = element.tagName === 'TEXTAREA' ? nativeTextAreaSetter : nativeSetter;
 
-    // 设置新值
-    element.value = value;
+    // 清空
+    setter.call(element, '');
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    await sleep(30);
 
-    // 触发各种事件确保框架能检测到变化
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
-    element.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
-    element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
+    // 写入新值
+    setter.call(element, value);
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+
+    // 模拟键盘输入
+    element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
+    element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
 
     element.blur();
   }
@@ -1078,6 +1306,38 @@ ${payload}`;
 
   // 逐题获取AI答案（只发送单道题目，不发送整页HTML）
   async function getAIAnswerForQuestion(question) {
+    // U校园快速路径：答案已从 API 获取
+    if (
+      question._unipusAnswer &&
+      question.answer !== null &&
+      question.answer !== undefined
+    ) {
+      console.log(
+        "[AI答题助手] 使用 U校园 API 答案:",
+        JSON.stringify(question.answer)
+      );
+      return {
+        answer: question.answer,
+        explanation: "U校园服务端正解",
+      };
+    }
+
+    // WeLearn 快速路径：答案已从数据 HTML 获取
+    if (
+      question._welearnAnswer &&
+      question.answer !== null &&
+      question.answer !== undefined
+    ) {
+      console.log(
+        "[AI答题助手] 使用 WeLearn 数据 HTML 答案:",
+        JSON.stringify(question.answer)
+      );
+      return {
+        answer: question.answer,
+        explanation: "WE Learn 数据正解",
+      };
+    }
+
     let prompt = `请回答以下${getTypeLabel(question.type)}：\n\n`;
     prompt += `题目：${question.text}\n\n`;
 
@@ -1095,6 +1355,11 @@ ${payload}`;
       question.inputs.length > 1
     ) {
       prompt += `（共有 ${question.inputs.length} 个空需要填写）\n\n`;
+    }
+
+    if (question.type === "banked_cloze" && question.wordBank && question.wordBank.length > 0) {
+      prompt += `可选词汇（${question.wordBank.length}个）：${question.wordBank.join('、')}\n`;
+      prompt += '请从可选词汇中选择最合适的词填入每个空，每个词最多用一次。\n\n';
     }
 
     prompt += `请严格按照JSON格式返回答案：
@@ -1286,42 +1551,32 @@ ${payload}`;
     }
   }
 
-  // Click element - 增强版，支持多种点击方式
+  // Click element - 增强版，兼容 React/Vue SPA
   async function clickElement(element) {
     if (!element) {
       console.warn("[AI答题助手] clickElement: element为空");
       return;
     }
 
-    console.log("[AI答题助手] 点击元素:", element.tagName, element.className);
 
     // 1. 如果是input元素（radio/checkbox）
     if (element.tagName === "INPUT") {
       const inputType = element.type?.toLowerCase();
       if (inputType === "radio" || inputType === "checkbox") {
-        // 优先尝试点击关联的label（腾讯问卷需要这样）
-        if (element.id) {
-          const label = document.querySelector(`label[for="${element.id}"]`);
-          if (label) {
-            console.log("[AI答题助手] 找到关联label，点击label");
-            label.click();
-            await sleep(50);
-            // 验证是否成功
-            if (element.checked) {
-              console.log("[AI答题助手] 通过label点击成功");
-              return;
-            }
-          }
-        }
-
-        // 如果没有label或label点击无效，直接设置checked
+        // 触发完整鼠标事件序列（SPA框架需要）
+        element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+        element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
         element.checked = true;
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        return;
       }
-      element.dispatchEvent(
-        new MouseEvent("click", { bubbles: true, cancelable: true })
-      );
-      element.dispatchEvent(new Event("change", { bubbles: true }));
-      element.dispatchEvent(new Event("input", { bubbles: true }));
+      // 非 radio/checkbox 的 input，直接用原生点击
+      element.focus();
+      element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      element.click();
       return;
     }
 
@@ -1331,11 +1586,11 @@ ${payload}`;
     );
     if (input) {
       input.checked = true;
-      input.dispatchEvent(
-        new MouseEvent("click", { bubbles: true, cancelable: true })
-      );
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      input.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      input.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
     // 3. 点击元素本身
@@ -1444,6 +1699,156 @@ ${payload}`;
     element.classList.remove("ai-answer-processing");
   }
 
+  // ======================== 答案详情面板 ========================
+
+  let answerPanel = null;
+  let answerPanelList = null;
+  let answerPanelStats = null;
+  let answerToggleBtn = null;
+
+  function getTypeLabelCN(type) {
+    const map = {
+      single: '单选', single_choice: '单选', choice: '单选',
+      multiple: '多选', multiple_choice: '多选',
+      fill: '填空', fill_blank: '填空', blank: '填空',
+      banked_cloze: '选词填空',
+      translation: '翻译',
+      rewrite_sentence: '改写',
+      grammar_fill: '语法填空',
+    };
+    return map[type] || type;
+  }
+
+  function ensureAnswerPanel() {
+    if (answerPanel) return;
+    // 触发按钮
+    answerToggleBtn = document.createElement('button');
+    answerToggleBtn.className = 'ai-answer-toggle-btn';
+    answerToggleBtn.innerHTML = '📋';
+    answerToggleBtn.title = '答题详情';
+    answerToggleBtn.onclick = () => {
+      answerPanel.classList.toggle('open');
+    };
+    document.body.appendChild(answerToggleBtn);
+
+    // 详情面板
+    answerPanel = document.createElement('div');
+    answerPanel.className = 'ai-answer-detail-panel';
+    answerPanel.innerHTML = `
+      <div class="ai-answer-panel-header">
+        <span class="ai-answer-panel-title">📋 答题详情</span>
+        <span class="ai-answer-panel-stats" id="ai-answer-panel-stats">0/0</span>
+        <button class="ai-answer-panel-close">×</button>
+      </div>
+      <div class="ai-answer-panel-list" id="ai-answer-panel-list"></div>
+    `;
+    document.body.appendChild(answerPanel);
+
+    answerPanelList = answerPanel.querySelector('#ai-answer-panel-list');
+    answerPanelStats = answerPanel.querySelector('#ai-answer-panel-stats');
+    answerPanel.querySelector('.ai-answer-panel-close').onclick = () => {
+      answerPanel.classList.remove('open');
+    };
+  }
+
+  function populateAnswerPanel() {
+    ensureAnswerPanel();
+    answerPanelList.innerHTML = '';
+    questions.forEach((q, i) => {
+      const div = document.createElement('div');
+      div.className = 'ai-answer-item pending';
+      div.id = 'ai-answer-item-' + i;
+
+      // 答案文本
+      const answerRaw = q.answer
+        ? (Array.isArray(q.answer) ? q.answer.join('、') : String(q.answer))
+        : '—';
+      const answerLetter = String(q.answer || '').trim().toUpperCase();
+
+      // 选项列表 HTML
+      let optionsHtml = '';
+      if (q.options && q.options.length > 0) {
+        optionsHtml = '<div class="ai-answer-item-options">';
+        q.options.forEach((opt) => {
+          const isCorrect = opt.label.toUpperCase() === answerLetter;
+          optionsHtml += `<span class="ai-opt-pill${isCorrect ? ' correct' : ''}">${opt.label}. ${opt.text}</span>`;
+        });
+        optionsHtml += '</div>';
+      }
+
+      // 答案显示
+      const answerDisplay = q.options && q.options.length > 0
+        ? q.options.find(o => o.label.toUpperCase() === answerLetter)
+        : null;
+      const answerShow = answerDisplay
+        ? `${answerDisplay.label}. ${answerDisplay.text}`
+        : answerRaw;
+
+      div.innerHTML = `
+        <div class="ai-answer-item-top">
+          <span class="ai-answer-item-index">第${i + 1}题</span>
+          <span class="ai-answer-item-type">${getTypeLabelCN(q.type)}</span>
+          <span class="ai-answer-item-status wait">待填入</span>
+        </div>
+        <div class="ai-answer-item-question">${q.text || '(无题干)'}</div>
+        ${optionsHtml}
+        <div class="ai-answer-item-answer-row">
+          <span class="ai-answer-label">答案：</span>
+          <span class="ai-answer-value">${answerShow}</span>
+          <button class="ai-copy-btn" data-answer="${answerShow.replace(/"/g, '&quot;')}" title="点击复制">📋 复制</button>
+        </div>
+      `;
+      answerPanelList.appendChild(div);
+    });
+
+    // 绑定复制按钮
+    answerPanelList.querySelectorAll('.ai-copy-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const text = btn.dataset.answer;
+        try {
+          await navigator.clipboard.writeText(text);
+          btn.textContent = '✓ 已复制';
+          btn.classList.add('copied');
+          setTimeout(() => { btn.textContent = '📋 复制'; btn.classList.remove('copied'); }, 1500);
+        } catch {
+          // 回退方案
+          const ta = document.createElement('textarea');
+          ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+          btn.textContent = '✓ 已复制';
+          setTimeout(() => { btn.textContent = '📋 复制'; }, 1500);
+        }
+      });
+    });
+
+    updatePanelStats();
+    answerPanel.classList.add('open');
+  }
+
+  function updateAnswerItemStatus(index, success) {
+    if (!answerPanel) return;
+    const item = answerPanelList.querySelector('#ai-answer-item-' + index);
+    if (!item) return;
+    item.classList.remove('pending');
+    item.classList.add('answered');
+    const statusEl = item.querySelector('.ai-answer-item-status');
+    if (statusEl) {
+      statusEl.textContent = success ? '✓ 已填入' : '✗ 失败';
+      statusEl.className = 'ai-answer-item-status ' + (success ? 'done' : 'wait');
+    }
+    updatePanelStats();
+  }
+
+  function updatePanelStats() {
+    if (!answerPanelStats) return;
+    const done = questions.filter(q => q.answered).length;
+    answerPanelStats.textContent = done + '/' + questions.length;
+  }
+
+  // ======================== 答案详情面板结束 ========================
+
   // Send log to popup
   function sendLog(level, text) {
     chrome.runtime.sendMessage({ type: "log", level, text });
@@ -1468,6 +1873,82 @@ ${payload}`;
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  // SPA 路由变化时清理状态
+  function resetState() {
+    questions = [];
+    answeredCount = 0;
+    aiDetectedSelectors = null;
+    if (answerPanel) {
+      answerPanel.classList.remove('open');
+    }
+    updateStats();
+    console.log('[AI答题助手] 页面路由已变化，状态已重置');
+  }
+
+  // 测试桥接：DOM CustomEvent + postMessage 双通道
+  function testTrigger(configOverride) {
+    config = configOverride || { baseUrl: '', apiKey: '', model: '' };
+    questions = [];
+    answeredCount = 0;
+    aiDetectedSelectors = null;
+    console.log('[TEST] 测试触发, config:', JSON.stringify(config));
+    handleScan((scanResult) => {
+      if (scanResult && scanResult.success) {
+        console.log('[TEST] 扫描成功, 开始答题');
+        startAnswering();
+      } else {
+        console.log('[TEST] 扫描失败:', scanResult?.message);
+      }
+    });
+  }
+  // 暴露到 DOM 元素上，Playwright 可触发
+  document.addEventListener('ai-test-start', (e) => {
+    console.log('[TEST] CustomEvent收到');
+    testTrigger(e.detail || {});
+  });
+  window.addEventListener('message', (event) => {
+    if (!event.data || typeof event.data !== 'object') return;
+    if (event.data.source !== 'ai-test-harness') return;
+    const msg = event.data;
+    if (msg.action === 'start') {
+      console.log('[TEST] postMessage收到');
+      testTrigger(msg.config);
+    } else if (msg.action === 'logState') {
+      window.postMessage({
+        source: 'ai-test-harness',
+        type: 'stateReport',
+        payload: {
+          url: window.location.href,
+          questionCount: questions.length,
+          answeredCount,
+          isRunning,
+          templates: window.siteMatcher ? window.siteMatcher._templates?.map(t => t.siteId) : [],
+        }
+      }, '*');
+    }
+  });
+
+  let lastUrl = window.location.href;
+  window.addEventListener('hashchange', () => {
+    if (window.location.href !== lastUrl) {
+      lastUrl = window.location.href;
+      resetState();
+    }
+  });
+  window.addEventListener('popstate', () => {
+    if (window.location.href !== lastUrl) {
+      lastUrl = window.location.href;
+      resetState();
+    }
+  });
+  // 也用 MutationObserver 兜底检测 SPA 内的 URL 变化
+  new MutationObserver(() => {
+    if (window.location.href !== lastUrl) {
+      lastUrl = window.location.href;
+      resetState();
+    }
+  }).observe(document.body || document.documentElement, { childList: true, subtree: true });
+
   // Initialize
   console.log("AI自动答题助手已加载");
 
@@ -1477,9 +1958,47 @@ ${payload}`;
       .init()
       .then(() => {
         console.log("模板系统初始化完成");
+        // WeLearn iframe 自动触发
+        if (window.welearnAPI && window.welearnAPI.isInIframe()) {
+          console.log("[AI答题助手] 检测到 WeLearn iframe，自动提取答案...");
+          autoTriggerWelearn();
+        }
       })
       .catch((error) => {
         console.error("模板系统初始化失败:", error);
       });
+  }
+
+  // WeLearn iframe 自动答题
+  async function autoTriggerWelearn() {
+    try {
+      const wlResult = await window.welearnAPI.getAnswers();
+      if (wlResult && wlResult.answers && wlResult.answers.length > 0) {
+        // 构建题目列表 + 面板
+        questions = [];
+        const typeMap = { single: "single", blank_choice: "fill", fill: "fill" };
+        let tabName = "";
+        wlResult.answers.forEach((a, i) => {
+          if (a.tabName && a.tabName !== tabName) tabName = a.tabName;
+          questions.push({
+            index: i,
+            type: typeMap[a.type] || "single",
+            text: (tabName ? "[" + tabName + "] " : "") + (a.questionText || ""),
+            options: [],
+            inputs: [],
+            answered: false,
+            answer: a.answers[0],
+            _welearnAnswer: true,
+          });
+        });
+        populateAnswerPanel();
+        updateStats();
+        // 自动点击正确选项
+        const fillResult = window.welearnAPI.autoFillAnswers(wlResult.answers);
+        console.log("[AI答题助手] WeLearn 自动填入:", fillResult);
+      }
+    } catch (e) {
+      console.error("[AI答题助手] WeLearn 自动触发失败:", e);
+    }
   }
 })();

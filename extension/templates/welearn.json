@@ -1,0 +1,46 @@
+{
+  "siteId": "welearn",
+  "siteName": "WE Learn (外教社)",
+  "urlPatterns": [
+    "*://centercourseware.sflep.com/*"
+  ],
+  "urlRegex": "^https?://centercourseware\\.sflep\\.com/",
+  "version": "1.0.0",
+  "createdAt": "2026-05-28",
+  "description": "WE Learn 随行课堂。题目在 centercourseware.sflep.com iframe 中，正确答案嵌入数据 HTML 的 et-choice key / et-blank 文本中。",
+  "selectors": {
+    "questionContainer": "et-stem et-choice, et-stem et-blank, et-stem ol > li",
+    "questionTypes": {
+      "detectByAttribute": false,
+      "single_choice": {
+        "container": "et-choice",
+        "title": "p, et-direction",
+        "optionInput": "li",
+        "optionLabel": "li",
+        "clickTarget": "li"
+      },
+      "fill_blank": {
+        "container": "et-blank",
+        "inputs": "input[type='text']"
+      },
+      "blank_choice": {
+        "container": "et-choice[join]",
+        "optionInput": "span",
+        "clickTarget": "span"
+      }
+    }
+  },
+  "features": {
+    "hasQuestionIndex": true,
+    "hasTypeAttribute": false,
+    "inputsHidden": false,
+    "needClickWrapper": true,
+    "autoScrollSupport": true,
+    "isSPA": true,
+    "useIframe": true,
+    "iframeDomain": "centercourseware.sflep.com",
+    "answerSource": "dataHtml",
+    "tabbedContent": true
+  },
+  "notes": "正确答案嵌入在数据 HTML 文件中（data/{unit}/{section}.html），通过 et-choice key 属性和 et-blank 文本内容获取。不需要 API 调用。"
+}

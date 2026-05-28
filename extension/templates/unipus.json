@@ -6,18 +6,17 @@
     "*://ucloud.unipus.cn/*"
   ],
   "urlRegex": "^https?://(?:ucontent|ucloud)\\.unipus\\.cn/",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "createdAt": "2026-05-16",
-  "lastUpdated": "2026-05-16",
-  "description": "Unipus 外语教学平台练习题型",
+  "lastUpdated": "2026-05-20",
+  "description": "Unipus 外语教学平台练习题型（兼容新旧页面）",
   "selectors": {
-    "questionContainer": "[class*='question-abs-material']",
+    "questionContainer": "[class*='question-common-abs-choice'], [class*='question-common-abs-question-container'], [class*='question-abs-material']",
     "questionTypes": {
-      "detectByClass": true,
       "banked_cloze": {
         "detect": ".question-abs-material-banked-cloze",
         "container": "[class*='banked-cloze']",
-        "title": "[class*='material'] p, [class*='title']",
+        "title": "[class*='question-basic'], [class*='material'] p, [class*='title']",
         "wordOptions": ".option",
         "blanks": "[class*='banked-cloze-scoop'] input[type='text']",
         "wordBank": ".question-material-banked-cloze-reply",
@@ -26,8 +25,8 @@
       "single_choice": {
         "detect": ".question-abs-material-single-choice",
         "container": "[class*='single-choice']",
-        "title": "[class*='stem'], [class*='title']",
-        "optionsContainer": "[class*='question-items'], [class*='options']",
+        "title": "[class*='question-basic'], [class*='stem'], [class*='title']",
+        "optionsContainer": "[class*='question-items'], [class*='options'], [class*='choice']",
         "optionInput": "input[type='radio']",
         "optionLabel": "label",
         "clickTarget": "input[type='radio']"
@@ -35,26 +34,39 @@
       "fill_blank": {
         "detect": ".question-abs-material-blank-filling",
         "container": "[class*='blank-filling']",
-        "title": "[class*='material'] p",
+        "title": "[class*='question-basic'], [class*='material'] p",
         "inputs": "input[type='text'], textarea"
       },
       "translation": {
         "detect": ".question-abs-material-translation",
         "container": "[class*='translation']",
-        "title": "[class*='material'] p",
+        "title": "[class*='question-basic'], [class*='material'] p",
         "inputs": "textarea, input[type='text']"
       },
       "rewrite_sentence": {
         "detect": ".question-abs-material-rewrite",
         "container": "[class*='rewrite']",
-        "title": "[class*='material'] p",
+        "title": "[class*='question-basic'], [class*='material'] p",
         "inputs": "input[type='text'], textarea"
       },
       "grammar_fill": {
         "detect": ".question-abs-material-grammar",
         "container": "[class*='grammar']",
-        "title": "[class*='material'] p",
+        "title": "[class*='question-basic'], [class*='material'] p",
         "inputs": "input[type='text']"
+      },
+      "choice": {
+        "container": "[class*='question-common-abs-choice']",
+        "title": ".ques-title, [class*='question-basic']",
+        "optionItem": ".option-wrap",
+        "optionInput": ".option",
+        "optionLabel": ".option",
+        "clickTarget": ".option"
+      },
+      "blank": {
+        "container": "[class*='question-common-abs-reply']:not([class*='choice'])",
+        "title": ".ques-title, [class*='question-basic']",
+        "inputs": "input[type='text'], textarea"
       }
     }
   },
@@ -66,5 +78,5 @@
     "autoScrollSupport": true,
     "isSPA": true
   },
-  "notes": "U校园 SPA 应用。选词填空题需特殊处理：点击 .option 选词 → 点击空位填入。翻译/改写题为 textarea。"
+  "notes": "U校园 SPA。兼容旧版 question-abs-material 和新版 question-common-abs-question-container。新版选择题使用 div.option 而非 input[type='radio']。"
 }

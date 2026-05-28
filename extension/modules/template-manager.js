@@ -23,6 +23,7 @@
       // 加载用户自定义模板
       await this.loadCustomTemplates();
 
+      this._initialized = true;
       console.log("[TemplateManager] 初始化完成");
     }
 
@@ -49,8 +50,21 @@
           console.log("[TemplateManager] 内置模板加载成功: 腾讯问卷");
         }
 
-        // TODO: 加载更多内置模板
-        // const examTemplate = await this._fetchTemplate('/templates/exam.json');
+        // 加载 U校园模板
+        const unipusTemplate = await this._fetchTemplate('/templates/unipus.json');
+        if (unipusTemplate) {
+          this.builtInTemplates.push(unipusTemplate);
+          window.siteMatcher.registerTemplate(unipusTemplate);
+          console.log('[TemplateManager] 内置模板加载成功: U校园');
+        }
+
+        // 加载 WE Learn 模板
+        const welearnTemplate = await this._fetchTemplate('/templates/welearn.json');
+        if (welearnTemplate) {
+          this.builtInTemplates.push(welearnTemplate);
+          window.siteMatcher.registerTemplate(welearnTemplate);
+          console.log('[TemplateManager] 内置模板加载成功: WE Learn');
+        }
       } catch (error) {
         console.error("[TemplateManager] 加载内置模板失败:", error);
       }

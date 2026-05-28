@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI自动答题助手",
-  "version": "1.0.0",
+  "version": "1.0.7",
   "description": "智能识别网页题目，通过AI自动答题",
   "permissions": [
     "activeTab",
@@ -28,11 +28,14 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
+      "all_frames": true,
       "js": [
         "modules/site-matcher.js",
         "modules/template-manager.js",
         "modules/bank.js",
         "modules/scanner-enhanced.js",
+        "modules/unipus-api.js",
+        "modules/welearn-api.js",
         "content.js"
       ],
       "css": ["content.css"]

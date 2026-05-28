@@ -21,3 +21,12 @@ build/
 # Temporary files
 *.tmp
 *.temp
+
+# Tests (dev-only)
+tests/
+!tests/unipus-api-test.html
+
+# Node deps (dev-only)
+node_modules/
+package.json
+package-lock.json
