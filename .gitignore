@@ -1,0 +1,27 @@
+# 敏感配置
+account.json
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.python-version
+
+# Java / Maven
+target/
+*.class
+*.jar
+*.war
+
+# 临时文件
+*.tmp
+*.temp
+panel_out.json
+
+# Playwright MCP cache
+.playwright-mcp/
+
+# IDE
+.vscode/
+.idea/
