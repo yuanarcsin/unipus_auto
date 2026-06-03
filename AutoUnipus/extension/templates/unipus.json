@@ -18,7 +18,7 @@
         "container": "[class*='banked-cloze']",
         "title": "[class*='question-basic'], [class*='material'] p, [class*='title']",
         "wordOptions": ".option",
-        "blanks": "[class*='banked-cloze-scoop'] input[type='text']",
+        "blanks": "[class*='banked-cloze-scoop'] input[type='text'], .fe-scoop input",
         "wordBank": ".question-material-banked-cloze-reply",
         "clickTarget": "click_option_then_blank"
       },

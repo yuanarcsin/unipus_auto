@@ -533,13 +533,16 @@
       return result;
     });
 
-    // 单个对象内含 N 个答案 → 拆成 N 个独立对象（选择题常见）
-    if (parsed.length === 1 && parsed[0].answers.length > 1) {
-      const multi = parsed[0].answers;
-      return multi.map((ans, i) => ({ answers: [ans], id: i }));
+    // 将所有子答案展平为独立项，确保与扫描到的题目数量对齐
+    // 修复：原代码仅在 parsed.length === 1 时展平，当 API 返回多个外层项
+    // （每项嵌套多个 children answers）时，只返回了前 N 个外层项数量的答案
+    const flat = [];
+    for (const item of parsed) {
+      for (const ans of item.answers) {
+        flat.push({ answers: [ans], id: flat.length });
+      }
     }
-
-    return parsed;
+    return flat.length > 0 ? flat : parsed;
   }
 
   // ======================== 一站式接口 ========================

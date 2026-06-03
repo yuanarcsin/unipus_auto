@@ -158,32 +158,46 @@
       short_answer: "fill",
     };
 
-    questions.forEach((q, i) => {
-      if (i >= apiAnswers.length) return;
-      const api = apiAnswers[i];
-      if (!api.answers || api.answers.length === 0) return;
+    // 多空位题型：需要聚合多个扁平后的 apiAnswers
+    const multiInputTypes = new Set([
+      "banked_cloze", "fill", "translation",
+      "rewrite_sentence", "grammar_fill",
+    ]);
+
+    let ptr = 0; // apiAnswers 消费指针
+
+    questions.forEach((q) => {
+      if (ptr >= apiAnswers.length) return;
 
       const mappedType = typeMap[q.type] || q.type;
 
+      if (multiInputTypes.has(mappedType)) {
+        // 聚合：按 inputs 数量消费连续 apiAnswers
+        const need = (q.inputs && q.inputs.length > 1) ? q.inputs.length : 1;
+        const merged = [];
+        for (let j = 0; j < need && ptr < apiAnswers.length; j++, ptr++) {
+          const a = apiAnswers[ptr];
+          if (a.answers && a.answers.length > 0) {
+            merged.push(a.answers[0]);
+          }
+        }
+        q.answer = merged;
+        q._unipusAnswer = true;
+        return;
+      }
+
+      // 单选题/多选题：1:1 映射
+      const api = apiAnswers[ptr++];
+      if (!api.answers || api.answers.length === 0) return;
+
       switch (mappedType) {
         case "single":
-          // U校园可能是选项字母或序号
           q.answer = api.answers[0];
           break;
         case "multiple":
           q.answer = api.answers;
           break;
-        case "fill":
-        case "translation":
-        case "rewrite_sentence":
-        case "grammar_fill":
-          q.answer = api.answers;
-          break;
-        case "banked_cloze":
-          q.answer = api.answers;
-          break;
         default:
-          // 未知类型也填充，让后续逻辑处理
           q.answer = api.answers;
       }
       q._unipusAnswer = true;
@@ -217,14 +231,12 @@
           if (wlResult && wlResult.answers && wlResult.answers.length > 0) {
             questions = createWelearnQuestions(wlResult.answers);
             answeredCount = 0;
-            populateAnswerPanel();
             updateStats();
-            // iframe 内自动点击正确答案（不提交）
+            // iframe 内自动点击正确答案并提交
             if (window.welearnAPI.isInIframe()) {
               const fillResult = window.welearnAPI.autoFillAnswers(wlResult.answers);
-              if (fillResult && fillResult.clicked > 0) {
-                sendLog("success", `已自动填入 ${fillResult.clicked}/${fillResult.total} 题`);
-              }
+              sendLog("success", `已自动填入 ${fillResult.clicked}/${fillResult.total} 题`);
+              setTimeout(() => window.welearnAPI.clickSubmit(), 800);
             }
             await window.templateManager.updateStats(template.siteId, "success");
             sendLog("success", `从数据 HTML 获取到 ${wlResult.answers.length} 个答案`);
@@ -289,7 +301,6 @@
           if (before !== questions.length) {
             sendLog("info", `已过滤 ${before - questions.length} 个聚合容器`);
           }
-          populateAnswerPanel();
 
           updateStats();
 
@@ -895,7 +906,6 @@ ${payload}`;
     }
 
     sendLog("info", `开始答题，共 ${questions.length} 道题目`);
-    populateAnswerPanel();
 
     for (let i = 0; i < questions.length; i++) {
       if (!isRunning) {
@@ -942,7 +952,6 @@ ${payload}`;
           question.explanation = answer.explanation;
           await applyAnswerDirectly(question);
           question.answered = true;
-          updateAnswerItemStatus(i, true);
           answeredCount++;
           updateStats();
           // 发送统计
@@ -1230,7 +1239,7 @@ ${payload}`;
     console.log(`[AI答题助手] 填空已填写: ${answers.join(', ')}`);
   }
 
-  // 选词填空题 - 点击选项词 → 点击对应的空
+  // 选词填空题 - 点击选项词 → 点击对应的空，再直接填入 value
   async function applyBankedClozeAnswer(question) {
     let answers = question.answer;
     if (!Array.isArray(answers)) { answers = [answers]; }
@@ -1240,14 +1249,14 @@ ${payload}`;
       .map(inp => inp.element || (inp.selector ? safeQuerySelector(inp.selector) : null))
       .filter(Boolean);
 
-
     for (let i = 0; i < Math.min(answers.length, blanks.length); i++) {
       const word = String(answers[i]).trim();
-      // 模拟真实点击：找到页面上匹配的候选词元素
-      const allOptionEls = document.querySelectorAll('.option');
+      const blank = blanks[i];
+
+      // 步骤1: 点击对应的候选词
+      const allOptionEls = document.querySelectorAll('.option, [class*="option"]');
       for (const opt of allOptionEls) {
         if (opt.textContent.trim() === word) {
-          // 完整鼠标事件序列（SPA框架兼容）
           opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
           opt.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
           opt.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
@@ -1255,14 +1264,18 @@ ${payload}`;
           break;
         }
       }
-      // 点击对应的空位
-      const blank = blanks[i];
+
+      // 步骤2: 点击对应的空位（触发 SPA 状态）
       blank.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
       blank.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
       blank.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       await sleep(150);
       blank.dispatchEvent(new Event('input', { bubbles: true }));
       blank.dispatchEvent(new Event('change', { bubbles: true }));
+
+      // 步骤3: 直接用 fillInput 填入 value（兼容 React 受控组件）
+      await fillInput(blank, word);
+      await sleep(100);
     }
     console.log('[AI答题助手] 选词填空已填入: ' + answers.join(', '));
   }
@@ -1699,155 +1712,7 @@ ${payload}`;
     element.classList.remove("ai-answer-processing");
   }
 
-  // ======================== 答案详情面板 ========================
-
-  let answerPanel = null;
-  let answerPanelList = null;
-  let answerPanelStats = null;
-  let answerToggleBtn = null;
-
-  function getTypeLabelCN(type) {
-    const map = {
-      single: '单选', single_choice: '单选', choice: '单选',
-      multiple: '多选', multiple_choice: '多选',
-      fill: '填空', fill_blank: '填空', blank: '填空',
-      banked_cloze: '选词填空',
-      translation: '翻译',
-      rewrite_sentence: '改写',
-      grammar_fill: '语法填空',
-    };
-    return map[type] || type;
-  }
-
-  function ensureAnswerPanel() {
-    if (answerPanel) return;
-    // 触发按钮
-    answerToggleBtn = document.createElement('button');
-    answerToggleBtn.className = 'ai-answer-toggle-btn';
-    answerToggleBtn.innerHTML = '📋';
-    answerToggleBtn.title = '答题详情';
-    answerToggleBtn.onclick = () => {
-      answerPanel.classList.toggle('open');
-    };
-    document.body.appendChild(answerToggleBtn);
-
-    // 详情面板
-    answerPanel = document.createElement('div');
-    answerPanel.className = 'ai-answer-detail-panel';
-    answerPanel.innerHTML = `
-      <div class="ai-answer-panel-header">
-        <span class="ai-answer-panel-title">📋 答题详情</span>
-        <span class="ai-answer-panel-stats" id="ai-answer-panel-stats">0/0</span>
-        <button class="ai-answer-panel-close">×</button>
-      </div>
-      <div class="ai-answer-panel-list" id="ai-answer-panel-list"></div>
-    `;
-    document.body.appendChild(answerPanel);
-
-    answerPanelList = answerPanel.querySelector('#ai-answer-panel-list');
-    answerPanelStats = answerPanel.querySelector('#ai-answer-panel-stats');
-    answerPanel.querySelector('.ai-answer-panel-close').onclick = () => {
-      answerPanel.classList.remove('open');
-    };
-  }
-
-  function populateAnswerPanel() {
-    ensureAnswerPanel();
-    answerPanelList.innerHTML = '';
-    questions.forEach((q, i) => {
-      const div = document.createElement('div');
-      div.className = 'ai-answer-item pending';
-      div.id = 'ai-answer-item-' + i;
-
-      // 答案文本
-      const answerRaw = q.answer
-        ? (Array.isArray(q.answer) ? q.answer.join('、') : String(q.answer))
-        : '—';
-      const answerLetter = String(q.answer || '').trim().toUpperCase();
-
-      // 选项列表 HTML
-      let optionsHtml = '';
-      if (q.options && q.options.length > 0) {
-        optionsHtml = '<div class="ai-answer-item-options">';
-        q.options.forEach((opt) => {
-          const isCorrect = opt.label.toUpperCase() === answerLetter;
-          optionsHtml += `<span class="ai-opt-pill${isCorrect ? ' correct' : ''}">${opt.label}. ${opt.text}</span>`;
-        });
-        optionsHtml += '</div>';
-      }
-
-      // 答案显示
-      const answerDisplay = q.options && q.options.length > 0
-        ? q.options.find(o => o.label.toUpperCase() === answerLetter)
-        : null;
-      const answerShow = answerDisplay
-        ? `${answerDisplay.label}. ${answerDisplay.text}`
-        : answerRaw;
-
-      div.innerHTML = `
-        <div class="ai-answer-item-top">
-          <span class="ai-answer-item-index">第${i + 1}题</span>
-          <span class="ai-answer-item-type">${getTypeLabelCN(q.type)}</span>
-          <span class="ai-answer-item-status wait">待填入</span>
-        </div>
-        <div class="ai-answer-item-question">${q.text || '(无题干)'}</div>
-        ${optionsHtml}
-        <div class="ai-answer-item-answer-row">
-          <span class="ai-answer-label">答案：</span>
-          <span class="ai-answer-value">${answerShow}</span>
-          <button class="ai-copy-btn" data-answer="${answerShow.replace(/"/g, '&quot;')}" title="点击复制">📋 复制</button>
-        </div>
-      `;
-      answerPanelList.appendChild(div);
-    });
-
-    // 绑定复制按钮
-    answerPanelList.querySelectorAll('.ai-copy-btn').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const text = btn.dataset.answer;
-        try {
-          await navigator.clipboard.writeText(text);
-          btn.textContent = '✓ 已复制';
-          btn.classList.add('copied');
-          setTimeout(() => { btn.textContent = '📋 复制'; btn.classList.remove('copied'); }, 1500);
-        } catch {
-          // 回退方案
-          const ta = document.createElement('textarea');
-          ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
-          document.body.appendChild(ta);
-          ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-          btn.textContent = '✓ 已复制';
-          setTimeout(() => { btn.textContent = '📋 复制'; }, 1500);
-        }
-      });
-    });
-
-    updatePanelStats();
-    answerPanel.classList.add('open');
-  }
-
-  function updateAnswerItemStatus(index, success) {
-    if (!answerPanel) return;
-    const item = answerPanelList.querySelector('#ai-answer-item-' + index);
-    if (!item) return;
-    item.classList.remove('pending');
-    item.classList.add('answered');
-    const statusEl = item.querySelector('.ai-answer-item-status');
-    if (statusEl) {
-      statusEl.textContent = success ? '✓ 已填入' : '✗ 失败';
-      statusEl.className = 'ai-answer-item-status ' + (success ? 'done' : 'wait');
-    }
-    updatePanelStats();
-  }
-
-  function updatePanelStats() {
-    if (!answerPanelStats) return;
-    const done = questions.filter(q => q.answered).length;
-    answerPanelStats.textContent = done + '/' + questions.length;
-  }
-
-  // ======================== 答案详情面板结束 ========================
+  // ======================== 答案详情面板（已移除） ========================
 
   // Send log to popup
   function sendLog(level, text) {
@@ -1878,9 +1743,6 @@ ${payload}`;
     questions = [];
     answeredCount = 0;
     aiDetectedSelectors = null;
-    if (answerPanel) {
-      answerPanel.classList.remove('open');
-    }
     updateStats();
     console.log('[AI答题助手] 页面路由已变化，状态已重置');
   }
@@ -1991,11 +1853,15 @@ ${payload}`;
             _welearnAnswer: true,
           });
         });
-        populateAnswerPanel();
         updateStats();
         // 自动点击正确选项
         const fillResult = window.welearnAPI.autoFillAnswers(wlResult.answers);
         console.log("[AI答题助手] WeLearn 自动填入:", fillResult);
+        // 自动提交（无论是否填入了选项都提交）
+        setTimeout(() => {
+          const submitted = window.welearnAPI.clickSubmit();
+          console.log("[AI答题助手] WeLearn 自动提交:", submitted);
+        }, 800);
       }
     } catch (e) {
       console.error("[AI答题助手] WeLearn 自动触发失败:", e);
