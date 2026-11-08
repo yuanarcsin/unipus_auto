@@ -131,7 +131,7 @@
       }
 
       // 根据类型提取选项或输入框
-      if (questionType === "single" || questionType === "multiple" || questionType === "choice" || questionType === "single_choice" || questionType === "multiple_choice") {
+      if (questionType === "single" || questionType === "multiple" || questionType === "choice" || questionType === "single_choice" || questionType === "multiple_choice" || questionType === "blank_choice") {
         question.options = this._parseOptions(element, typeSelectors, template);
       } else if (questionType === "banked_cloze") {
         // 提取词库

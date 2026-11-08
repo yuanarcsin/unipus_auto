@@ -8,6 +8,7 @@
   let answeredCount = 0;
   let isRunning = false;
   let config = null;
+  let welearnAnswers = null;
 
   // Question selectors for common exam platforms
   const QUESTION_SELECTORS = [
@@ -73,9 +74,13 @@
         questions = [];
         answeredCount = 0;
         aiDetectedSelectors = null;
+        welearnAnswers = null;
         handleScan((scanResult) => {
           if (scanResult && scanResult.success) {
             startAnswering();
+          } else if (scanResult?.referenceOnly) {
+            // 参考文本题只展示示例，不点击或提交题目控件。
+            return;
           } else {
             sendLog("warning", scanResult?.message || "扫描未发现题目");
             sendComplete();
@@ -102,7 +107,8 @@
   function createWelearnQuestions(answers) {
     const typeMap = {
       single: "single",
-      blank_choice: "fill",
+      multiple: "multiple",
+      blank_choice: "single",
       fill: "fill",
       tof: "single",
     };
@@ -123,7 +129,7 @@
         options: [],
         inputs: [],
         answered: false,
-        answer: a.answers[0],
+        answer: qtype === "multiple" ? a.answers : a.answers[0],
         _welearnAnswer: true,
       };
 
@@ -139,6 +145,77 @@
     });
 
     return qs;
+  }
+
+  async function buildReferenceScripts(references) {
+    const sections = references
+      .filter((reference) => reference.type === "read_aloud")
+      .map((reference) => ({
+        title: reference.title,
+        role: "朗读",
+        // 跟读题要求逐字朗读；模型改写原文反而会变成错误练习稿。
+        lines: reference.lines.slice(),
+      }));
+    const toGenerate = references.filter((reference) =>
+      reference.type === "role_play" || reference.type === "open_ended");
+    if (!toGenerate.length) return { sections, aiGenerated: false };
+    if (!config?.apiKey || !config?.baseUrl || !config?.model) {
+      return { sections, aiGenerated: false,
+        error: "请先在设置中配置 DeepSeek API Key，才能生成参考文本题的示例稿" };
+    }
+
+    const prompt = JSON.stringify({
+      task: "按题目和参考文本生成简短、连贯、可照读的英语示例回答；题型不一定需要录音。每个开放问题单独回答，从参考表达中选择合适组合，不要原样保留斜杠选项。角色扮演每段分别生成 A、B 的可读台词，逐一回应问题，保持原对话事实和顺序。每个 section.title 必须与对应 exercise.title 完全一致；开放题每题一节，role 为空；角色扮演每段各给 A、B 一节。只返回指定 JSON，不要 Markdown。",
+      exercises: toGenerate.map((reference) => ({
+        type: reference.type,
+        title: reference.title,
+        instruction: reference.instruction,
+        questions: reference.prompts,
+        referenceText: reference.lines,
+      })),
+      output: { sections: [{ title: "问题 1 或 Conversation 1", role: "A、B 或空", lines: ["spoken sentence"] }] },
+    });
+
+    const responseText = await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ action: "generateReferenceScript", config, prompt }, (response) => {
+        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        if (!response?.success) return reject(new Error(response?.error || "AI 请求失败"));
+        resolve(response.data);
+      });
+    });
+    const parsed = parseAIResponse(responseText);
+    if (!Array.isArray(parsed.sections)) throw new Error("AI 未返回口播稿 sections 数组");
+    const aiSections = parsed.sections.map((section) => ({
+      title: String(section.title || "").trim(),
+      role: String(section.role || "").trim().toUpperCase(),
+      lines: Array.isArray(section.lines) ? section.lines
+        .filter((line) => typeof line === "string" && line.trim())
+        .slice(0, 40).map((line) => line.trim().slice(0, 600)) : [],
+    })).filter((section) => section.lines.length);
+    if (!aiSections.length) throw new Error("AI 返回了空口播稿");
+    const ordered = [];
+    for (const reference of toGenerate) {
+      const roles = reference.type === "role_play" ? ["A", "B"] : [""];
+      for (const role of roles) {
+        const section = aiSections.find((item) => item.title === reference.title &&
+          (reference.type !== "role_play" || item.role === role));
+        if (!section) throw new Error("AI 未覆盖全部题目或角色，请重试");
+        ordered.push(section);
+      }
+    }
+    return { sections: [...sections, ...ordered], aiGenerated: true };
+  }
+
+  async function showReferenceScripts(references, hasKeyedAnswers) {
+    sendLog("info", "已提取问题与参考文本，正在准备示例稿...");
+    let draft;
+    try {
+      draft = await buildReferenceScripts(references);
+    } catch (error) {
+      draft = { sections: [], aiGenerated: false, error: error.message };
+    }
+    chrome.runtime.sendMessage({ type: "referenceScripts",
+      references, hasKeyedAnswers, ...draft });
   }
 
   // 将 U校园 API 答案按顺序合并到题目列表
@@ -206,6 +283,7 @@
 
   // 处理扫描请求
   async function handleScan(sendResponse) {
+    welearnAnswers = null;
     if (!config) {
       sendResponse({ success: false, count: 0, message: "请先配置API" });
       return;
@@ -228,25 +306,27 @@
         sendLog("info", "检测到 WE Learn 页面，从数据 HTML 获取正解...");
         try {
           const wlResult = await window.welearnAPI.getAnswers();
+          if (wlResult?.references?.length) {
+            await showReferenceScripts(wlResult.references, Boolean(wlResult.answers?.length));
+          }
           if (wlResult && wlResult.answers && wlResult.answers.length > 0) {
+            welearnAnswers = wlResult.answers;
             questions = createWelearnQuestions(wlResult.answers);
             answeredCount = 0;
             updateStats();
-            // iframe 内自动点击正确答案并提交
-            if (window.welearnAPI.isInIframe()) {
-              const fillResult = window.welearnAPI.autoFillAnswers(wlResult.answers);
-              sendLog("success", `已自动填入 ${fillResult.clicked}/${fillResult.total} 题`);
-              setTimeout(() => window.welearnAPI.clickSubmit(), 800);
-            }
             await window.templateManager.updateStats(template.siteId, "success");
             sendLog("success", `从数据 HTML 获取到 ${wlResult.answers.length} 个答案`);
             sendResponse({ success: true, count: questions.length, message: "" });
             return;
+          } else if (wlResult?.references?.length) {
+            sendResponse({ success: false, count: 0, referenceOnly: true,
+              message: "已展示参考文本题的示例稿；不自动填答或提交" });
+            return;
           } else {
-            sendLog("warning", "WE Learn 数据 HTML 未解析到答案，回退到 AI 模式");
+            sendLog("warning", "WE Learn 当前课件没有可解析的正解；AI 仅作非保证兜底");
           }
         } catch (e) {
-          sendLog("warning", `WE Learn 解析失败: ${e.message}，回退到 AI 模式`);
+          sendLog("warning", `WE Learn 解析失败: ${e.message}；AI 仅作非保证兜底`);
           await window.templateManager.updateStats(template.siteId, "fail");
         }
       }
@@ -257,6 +337,11 @@
         const result = scanner.scanWithTemplate(template);
 
         if (result.success && result.count > 0) {
+          if (template.siteId === "welearn" && !config?.apiKey) {
+            sendResponse({ success: false, count: 0,
+              message: "当前课件未提供可读取正解；AI 兜底需要先配置模型" });
+            return;
+          }
           // 模板扫描成功
           questions = result.questions;
           answeredCount = 0;
@@ -325,6 +410,11 @@
     }
 
     // 步骤2: 使用AI分析（无模板或模板失败时）
+    if (!config?.apiKey || !config?.baseUrl || !config?.model) {
+      sendResponse({ success: false, count: 0,
+        message: "当前页面没有可读取的正解；若需 AI 兜底，请先配置模型" });
+      return;
+    }
     sendLog("info", "正在使用AI分析页面结构，请耐心等待...");
 
     try {
@@ -905,6 +995,32 @@ ${payload}`;
       return;
     }
 
+    if (welearnAnswers) {
+      if (!window.welearnAPI.isInIframe()) {
+        isRunning = false;
+        chrome.runtime.sendMessage({ type: "error",
+          text: "WE Learn 练习 iframe 未就绪，请打开具体练习页后重试" });
+        return;
+      }
+      try {
+        const result = window.welearnAPI.autoFillAnswers(welearnAnswers);
+        for (const detail of result.details) {
+          if (detail.ok && questions[detail.i]) questions[detail.i].answered = true;
+        }
+        answeredCount = questions.filter((q) => q.answered).length;
+        updateStats();
+        sendLog(result.clicked ? "success" : "warning",
+          "WE Learn 已填入 " + result.clicked + "/" + result.total + " 题；不会自动提交");
+      } catch (error) {
+        chrome.runtime.sendMessage({ type: "error", text: "WE Learn 填入失败: " + error.message });
+        isRunning = false;
+        return;
+      }
+      isRunning = false;
+      sendComplete();
+      return;
+    }
+
     sendLog("info", `开始答题，共 ${questions.length} 道题目`);
 
     for (let i = 0; i < questions.length; i++) {
@@ -1120,6 +1236,7 @@ ${payload}`;
   function normalizeQuestionType(type) {
     const map = {
       single_choice: "single",
+      blank_choice: "single",
       multiple_choice: "multiple",
       choice: "single",
       fill_blank: "fill",
@@ -1743,6 +1860,7 @@ ${payload}`;
     questions = [];
     answeredCount = 0;
     aiDetectedSelectors = null;
+    welearnAnswers = null;
     updateStats();
     console.log('[AI答题助手] 页面路由已变化，状态已重置');
   }
@@ -1820,51 +1938,10 @@ ${payload}`;
       .init()
       .then(() => {
         console.log("模板系统初始化完成");
-        // WeLearn iframe 自动触发
-        if (window.welearnAPI && window.welearnAPI.isInIframe()) {
-          console.log("[AI答题助手] 检测到 WeLearn iframe，自动提取答案...");
-          autoTriggerWelearn();
-        }
       })
       .catch((error) => {
         console.error("模板系统初始化失败:", error);
       });
   }
 
-  // WeLearn iframe 自动答题
-  async function autoTriggerWelearn() {
-    try {
-      const wlResult = await window.welearnAPI.getAnswers();
-      if (wlResult && wlResult.answers && wlResult.answers.length > 0) {
-        // 构建题目列表 + 面板
-        questions = [];
-        const typeMap = { single: "single", blank_choice: "fill", fill: "fill" };
-        let tabName = "";
-        wlResult.answers.forEach((a, i) => {
-          if (a.tabName && a.tabName !== tabName) tabName = a.tabName;
-          questions.push({
-            index: i,
-            type: typeMap[a.type] || "single",
-            text: (tabName ? "[" + tabName + "] " : "") + (a.questionText || ""),
-            options: [],
-            inputs: [],
-            answered: false,
-            answer: a.answers[0],
-            _welearnAnswer: true,
-          });
-        });
-        updateStats();
-        // 自动点击正确选项
-        const fillResult = window.welearnAPI.autoFillAnswers(wlResult.answers);
-        console.log("[AI答题助手] WeLearn 自动填入:", fillResult);
-        // 自动提交（无论是否填入了选项都提交）
-        setTimeout(() => {
-          const submitted = window.welearnAPI.clickSubmit();
-          console.log("[AI答题助手] WeLearn 自动提交:", submitted);
-        }, 800);
-      }
-    } catch (e) {
-      console.error("[AI答题助手] WeLearn 自动触发失败:", e);
-    }
-  }
 })();

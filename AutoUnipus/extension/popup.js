@@ -33,20 +33,25 @@ let editingModelId = null;
 
 const logContent = document.getElementById("logContent");
 const clearLogBtn = document.getElementById("clearLog");
+const recordingPanel = document.getElementById("recordingPanel");
+const recordingContent = document.getElementById("recordingContent");
+const copyRecordingBtn = document.getElementById("copyRecordingBtn");
 
 // State
 let isRunning = false;
 let hasScanned = false;
+let runningFrameId = 0;
+let recordingCopyText = "";
 
 // Built-in default model — DeepSeek Flash
 // API Key 需用户在设置中自行填入
 const BUILTIN_MODEL = {
   id: "builtin-deepseek",
   name: "DeepSeek Flash",
-  baseUrl: "https://api.deepseek.com/v1",
+  baseUrl: "https://api.deepseek.com",
   apiKey: "",
   model: "deepseek-flash",
-  builtin: false,
+  builtin: true,
 };
 
 // Initialize
@@ -56,7 +61,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Check active session
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tabs[0]) {
-    chrome.tabs.sendMessage(tabs[0].id, { action: "getStatus" }, (response) => {
+    const frameId = await findWelearnFrameId(tabs[0].id, tabs[0].url) ?? 0;
+    chrome.tabs.sendMessage(tabs[0].id, { action: "getStatus" }, { frameId }, (response) => {
       if (chrome.runtime.lastError) return;
 
       if (response) {
@@ -159,8 +165,9 @@ async function initModels() {
 }
 
 async function getAllModels() {
-  const data = await chrome.storage.sync.get(["aiModels"]);
-  return [BUILTIN_MODEL, ...(data.aiModels || [])];
+  const data = await chrome.storage.sync.get(["aiModels", "builtinDeepseekConfig"]);
+  return [{ ...BUILTIN_MODEL, ...(data.builtinDeepseekConfig || {}),
+    id: BUILTIN_MODEL.id }, ...(data.aiModels || [])];
 }
 
 async function getActiveModel() {
@@ -192,6 +199,7 @@ async function renderModelList() {
         <div class="model-meta">${model.model}</div>
       </div>
       <div class="model-actions">
+        ${model.builtin ? `<button class="icon-btn edit-model-btn" data-model-id="${model.id}" title="编辑模型">编辑</button>` : ""}
         ${
           !model.builtin
             ? `
@@ -297,7 +305,9 @@ saveModelBtn.addEventListener("click", async () => {
   const data = await chrome.storage.sync.get(["aiModels"]);
   const models = data.aiModels || [];
 
-  if (editingModelId) {
+  if (editingModelId === BUILTIN_MODEL.id) {
+    await chrome.storage.sync.set({ builtinDeepseekConfig: { name, baseUrl, apiKey, model } });
+  } else if (editingModelId) {
     // Edit existing
     const index = models.findIndex((m) => m.id === editingModelId);
     if (index !== -1) {
@@ -315,7 +325,9 @@ saveModelBtn.addEventListener("click", async () => {
     });
   }
 
-  await chrome.storage.sync.set({ aiModels: models });
+  if (editingModelId !== BUILTIN_MODEL.id) {
+    await chrome.storage.sync.set({ aiModels: models });
+  }
 
   setTimeout(() => {
     saveModelBtn.disabled = false;
@@ -340,15 +352,34 @@ function showEditStatus(type, message) {
 // --- Action Logic ---
 
 // 确保 content script 已注入到目标页面
-async function ensureContentScriptInjected(tabId) {
+async function findWelearnFrameId(tabId, tabUrl) {
+  let host;
+  try { host = new URL(tabUrl).hostname; } catch (_) { return null; }
+  if (!['welearn.sflep.com', 'centercourseware.sflep.com'].includes(host)) return null;
+  try {
+    const frames = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: () => ({ host: location.hostname, hasRoute: Boolean(location.hash) }),
+    });
+    const courseFrame = frames.find(({ result }) =>
+      result?.host === 'centercourseware.sflep.com' && result.hasRoute
+    );
+    return courseFrame?.frameId ?? null;
+  } catch (error) {
+    console.warn('[popup] 无法定位 WE Learn 课程 iframe:', error);
+    return null;
+  }
+}
+
+async function ensureContentScriptInjected(tabId, frameId = 0) {
   try {
     // 先尝试发送一个测试消息
     return new Promise((resolve) => {
-      chrome.tabs.sendMessage(tabId, { action: "getStatus" }, (response) => {
+      chrome.tabs.sendMessage(tabId, { action: "getStatus" }, { frameId }, (response) => {
         if (chrome.runtime.lastError) {
           // Content script 未加载，尝试注入
           console.log("[popup] Content script 未加载，尝试注入...");
-          injectContentScript(tabId)
+          injectContentScript(tabId, frameId)
             .then(resolve)
             .catch(() => resolve(false));
         } else {
@@ -364,7 +395,7 @@ async function ensureContentScriptInjected(tabId) {
 }
 
 // 程序化注入 content script
-async function injectContentScript(tabId) {
+async function injectContentScript(tabId, frameId = 0) {
   try {
     // 检查是否是可以注入的页面
     const tab = await chrome.tabs.get(tabId);
@@ -381,13 +412,13 @@ async function injectContentScript(tabId) {
 
     // 注入 CSS
     await chrome.scripting.insertCSS({
-      target: { tabId },
+      target: { tabId, frameIds: [frameId] },
       files: ["content.css"],
     });
 
     // 按顺序注入 JS 模块
     await chrome.scripting.executeScript({
-      target: { tabId },
+      target: { tabId, frameIds: [frameId] },
       files: [
         "modules/site-matcher.js",
         "modules/template-manager.js",
@@ -417,10 +448,14 @@ startBtn.addEventListener("click", async () => {
     addLog("warning", "已暂停答题");
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tabs[0]) {
-      chrome.tabs.sendMessage(tabs[0].id, { action: "stop" });
+      chrome.tabs.sendMessage(tabs[0].id, { action: "stop" }, { frameId: runningFrameId });
     }
     return;
   }
+
+  recordingPanel.hidden = true;
+  recordingContent.textContent = "";
+  recordingCopyText = "";
 
   const activeModel = await getActiveModel();
   const config = {
@@ -448,17 +483,20 @@ startBtn.addEventListener("click", async () => {
     return;
   }
 
-  const injected = await ensureContentScriptInjected(tab.id);
+  const frameId = await findWelearnFrameId(tab.id, tab.url) ?? 0;
+  const injected = await ensureContentScriptInjected(tab.id, frameId);
   if (!injected) {
     addLog("error", "无法连接到页面，请刷新页面后重试");
     return;
   }
 
   setRunningState(true);
+  runningFrameId = frameId;
   addLog("info", "🚀 开始自动答题");
   chrome.tabs.sendMessage(
     tab.id,
     { action: "start", config },
+    { frameId },
     (response) => {
       if (chrome.runtime.lastError) {
         setRunningState(false);
@@ -497,14 +535,70 @@ function addLog(type, message) {
     minute: "2-digit",
   });
   const logItem = document.createElement("div");
-  logItem.className = `log-item log-${type}`;
-  logItem.innerHTML = `
-    <span class="log-time">${time}</span>
-    <span class="log-msg">${message}</span>
-  `;
+  logItem.className = "log-item log-" + type;
+  const timeEl = document.createElement("span");
+  timeEl.className = "log-time";
+  timeEl.textContent = time;
+  const textEl = document.createElement("span");
+  textEl.className = "log-msg";
+  textEl.textContent = String(message);
+  logItem.append(timeEl, textEl);
   logContent.appendChild(logItem);
   logContent.scrollTop = logContent.scrollHeight;
 }
+
+function formatReferenceLine(line) {
+  if (typeof line === "string") return line;
+  return (line?.role ? line.role + ": " : "") + (line?.text || "");
+}
+
+function renderReferenceScripts(message) {
+  const details = [];
+  for (const reference of message.references || []) {
+    details.push("【" + reference.title + "】");
+    if (reference.instruction) details.push("要求：" + reference.instruction);
+    if (reference.type !== "read_aloud") {
+      for (const prompt of reference.prompts || []) {
+        details.push("问题：" + formatReferenceLine(prompt));
+      }
+    }
+    details.push("课程参考文本：");
+    for (const line of reference.lines || []) details.push(formatReferenceLine(line));
+    details.push("");
+  }
+
+  if (message.sections?.length) {
+    details.push(message.aiGenerated ? "【AI 可照读示例】" : "【可照读原文】");
+    const scriptLines = [];
+    for (const section of message.sections) {
+      const heading = section.title + (section.role ? " / " + section.role : "");
+      details.push(heading);
+      scriptLines.push(heading);
+      for (const line of section.lines || []) {
+        details.push(line);
+        scriptLines.push(line);
+      }
+      details.push("");
+      scriptLines.push("");
+    }
+    recordingCopyText = scriptLines.join("\n").trim();
+  } else {
+    recordingCopyText = details.join("\n").trim();
+  }
+  if (message.error) details.push("提示：" + message.error);
+  recordingContent.textContent = details.join("\n").trim();
+  recordingPanel.hidden = false;
+  recordingPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+copyRecordingBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(recordingCopyText || recordingContent.textContent);
+    addLog("success", "示例稿已复制");
+  } catch (error) {
+    addLog("error", "复制失败，请手动选中文本复制");
+  }
+});
 
 clearLogBtn.addEventListener("click", () => {
   logContent.innerHTML = "";
@@ -517,6 +611,26 @@ chrome.runtime.onMessage.addListener((message) => {
     case "log":
       addLog(message.level, message.text);
       break;
+    case "recordingReferences":
+      setRunningState(false);
+      updateStatus("ready", "参考文本");
+      addLog("info", "课程参考材料不是固定评分答案；未自动作答");
+      for (const reference of message.references || []) {
+        addLog("success", reference.title);
+        for (const line of reference.lines || []) {
+          addLog("info", typeof line === "string" ? line :
+            (line.role ? line.role + ": " : "") + line.text);
+        }
+      }
+      break;
+    case "referenceScripts":
+      if (!message.hasKeyedAnswers) setRunningState(false);
+      updateStatus(message.hasKeyedAnswers ? "running" : "ready",
+        message.aiGenerated ? "示例稿已生成" : "参考文本");
+      renderReferenceScripts(message);
+      addLog(message.error ? "warning" : "success",
+        message.error || "已展示问题、参考文本及示例稿；参考文本题未自动填答或提交");
+      break;
     case "updateStats":
       questionCount.textContent = message.questionCount;
       answeredCount.textContent = message.answeredCount;
@@ -524,7 +638,7 @@ chrome.runtime.onMessage.addListener((message) => {
     case "complete":
       setRunningState(false);
       updateStatus("ready", "完成");
-      addLog("success", `🎉 全部完成 (共${message.answeredCount}题)`);
+      addLog("success", "答题结束，已填入 " + message.answeredCount + " 题");
       break;
     case "error":
       setRunningState(false);
