@@ -8,8 +8,8 @@
 
   function isInIframe() {
     return (
-      window.location.hostname.includes("centercourseware.sflep.com") &&
-      window.location.hash
+      window.location.hostname === "centercourseware.sflep.com" &&
+      Boolean(window.location.hash)
     );
   }
 
@@ -17,39 +17,49 @@
 
   function extractPageInfo() {
     const result = { dataUrl: null, route: null };
+    const params = new URLSearchParams(window.location.search);
+    result.cid = params.get("cid");
+    result.classid = params.get("classid");
+    result.tid = params.get("tid");
+    result.sco = params.get("sco");
 
+    let source = null;
     if (isInIframe()) {
-      // iframe 内：从 hash 推导 data URL
-      const hash = (window.location.hash || "").replace(/^#\/?/, "");
-      const route = hash.split("?")[0];
-      result.route = route;
-      result.dataUrl = "data/" + route + ".html";
+      source = new URL(window.location.href);
     } else {
-      // 主页面：从 iframe src 推导（保留 %20 编码，不用 new URL 解码）
-      const params = new URLSearchParams(window.location.search);
-      result.cid = params.get("cid");
-      result.classid = params.get("classid");
-      result.tid = params.get("tid");
-      result.sco = params.get("sco");
-
-      const iframe = document.querySelector(
-        'iframe[src*="centercourseware.sflep.com"]'
-      );
-      if (iframe) {
+      for (const iframe of document.querySelectorAll("iframe[src]")) {
         try {
-          const src = iframe.src;
-          // src: "https://centercourseware.sflep.com/New%20Advanced.../index.html#/10/4-1"
-          // 直接字符串替换，不经过 URL 解码
-          const hashPart = (src.split("#")[1] || "").replace(/^\//, "");
-          const route = hashPart.split("?")[0];
-          const baseUrl = src.replace(/\/index\.html.*$/, "");
-          result.route = route;
-          result.dataUrl = baseUrl + "/data/" + route + ".html";
+          const candidate = new URL(iframe.getAttribute("src"), window.location.href);
+          if (candidate.hostname === "centercourseware.sflep.com") {
+            source = candidate;
+            break;
+          }
         } catch (_) {}
       }
     }
 
+    if (!source || source.protocol !== "https:" ||
+        source.hostname !== "centercourseware.sflep.com") return result;
+
+    const route = source.hash.replace(/^#\/?/, "").split("?")[0].replace(/^\/+/, "");
+    if (!route || route.split("/").some((part) => part === "." || part === "..")) return result;
+    result.route = route;
+    result.dataUrl = new URL("data/" + route + ".html", new URL("./", source)).href;
+
     return result;
+  }
+
+  function observedDataUrls() {
+    if (!window.performance?.getEntriesByType) return [];
+    return window.performance.getEntriesByType("resource")
+      .map((entry) => {
+        try { return new URL(entry.name); } catch (_) { return null; }
+      })
+      .filter((url) => url && url.protocol === "https:" &&
+        url.hostname === "centercourseware.sflep.com" &&
+        /\/data\/.+\.html$/i.test(url.pathname))
+      .map((url) => url.href)
+      .reverse();
   }
 
   // ======================== 数据 HTML 抓取 ========================
@@ -58,7 +68,7 @@
     if (isInIframe()) {
       // iframe 内同源，直接 fetch
       console.log("[welearn-api] iframe 同源抓取:", url);
-      const resp = await fetch(url);
+      const resp = await fetch(url, { credentials: "same-origin" });
       if (!resp.ok) throw new Error("Fetch failed: " + resp.status);
       return await resp.text();
     } else {
@@ -70,7 +80,7 @@
           (response) => {
             if (chrome.runtime.lastError)
               return reject(new Error(chrome.runtime.lastError.message));
-            if (!response.success) return reject(new Error(response.error));
+            if (!response?.success) return reject(new Error(response?.error || "WE Learn 请求无响应"));
             resolve(response.data);
           }
         );
@@ -81,124 +91,123 @@
   // ======================== HTML 答案解析 ========================
 
   function parseAnswers(html) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const titles = Array.from(doc.querySelectorAll("ul[header] li"),
+      (li) => li.textContent.trim());
+    const tabs = Array.from(doc.querySelectorAll("tab"));
+    const regions = tabs.length ? tabs : [doc.body];
     const results = [];
-    let currentTabName = "";
 
-    // 提取 Tab 标题
-    const tabTitles = [];
-    const headerMatch = html.match(/<ul header>([\s\S]*?)<\/ul>/);
-    if (headerMatch) {
-      const liMatches = headerMatch[1].matchAll(
-        /<li[^>]*>([^<]*)<\/li>/g
-      );
-      for (const m of liMatches) tabTitles.push(m[1].trim());
-    }
+    regions.forEach((region, tabIdx) => {
+      const tabName = tabs.length ? (titles[tabIdx] || "Tab " + (tabIdx + 1)) : "";
+      // 保持资源 HTML 中的题目顺序，避免选择与填空混排时错位。
+      region.querySelectorAll("et-choice, et-blank, et-tof").forEach((node) => {
+        if (node.tagName !== "ET-CHOICE" && node.closest("et-choice")) return;
+        const direction = node.closest("et-stem")?.querySelector("et-direction") ||
+          region.querySelector("et-direction");
+        const questionText = direction?.textContent.trim() || "";
+        const common = { questionText, tabName };
 
-    const tabSections = html.split(/(<tab>|<\/tab>)/);
-    let tabIdx = -1;
-    let inTab = false;
-
-    for (const section of tabSections) {
-      if (section === "<tab>") {
-        inTab = true;
-        tabIdx++;
-        currentTabName = tabTitles[tabIdx] || "Tab " + (tabIdx + 1);
-        continue;
-      }
-      if (section === "</tab>") {
-        inTab = false;
-        continue;
-      }
-      if (!inTab || !section.trim()) continue;
-
-      const dirMatch = section.match(
-        /<et-direction[^>]*>([\s\S]*?)<\/et-direction>/
-      );
-      const direction = dirMatch
-        ? dirMatch[1].replace(/<[^>]+>/g, "").trim()
-        : "";
-
-      // et-choice：选择题 / 选词填空
-      const choiceRegex =
-        /<et-choice\s+([^>]*?)>([\s\S]*?)<\/et-choice>/g;
-      let cm;
-      while ((cm = choiceRegex.exec(section)) !== null) {
-        const attrs = cm[1];
-        const inner = cm[2];
-        const keyMatch = attrs.match(/key\s*=\s*"([^"]*)"/);
-        if (!keyMatch) continue;
-
-        const key = keyMatch[1];
-        const hasJoin = /join\s*=/.test(attrs);
-        let answer, type;
-
-        if (hasJoin) {
-          // 选词填空：key 数字 → span 索引
-          type = "blank_choice";
-          const spans = [];
-          const sr = /<span[^>]*>([^<]*)<\/span>/g;
-          let sm;
-          while ((sm = sr.exec(inner)) !== null)
-            spans.push(sm[1].trim());
-          answer = spans[parseInt(key) - 1] || key;
-        } else {
-          // 选择题：key 字母 → 选项索引
-          type = "single";
-          const opts = [];
-          const lr = /<li[^>]*>([\s\S]*?)<\/li>/g;
-          let lm;
-          while ((lm = lr.exec(inner)) !== null)
-            opts.push(lm[1].replace(/<[^>]+>/g, "").trim());
-          const idx = key.toUpperCase().charCodeAt(0) - 65;
-          answer = opts[idx] || key.toUpperCase();
+        if (node.tagName === "ET-CHOICE") {
+          const key = node.getAttribute("key")?.trim() || "";
+          if (node.hasAttribute("multi")) {
+            const options = Array.from(node.querySelectorAll("li"),
+              (li) => li.textContent.trim());
+            const indexes = key.split(",").map((part) => Number(part.trim()) - 1);
+            if (!indexes.length || indexes.some((index) =>
+              !Number.isInteger(index) || index < 0 || index >= options.length)) return;
+            results.push({ ...common, type: "multiple", key, indexes,
+              answers: indexes.map((index) => options[index]) });
+          } else if (node.hasAttribute("join")) {
+            const index = Number.parseInt(key, 10) - 1;
+            if (!Number.isInteger(index) || index < 0) return;
+            const options = Array.from(node.querySelectorAll("span"),
+              (span) => span.textContent.trim());
+            results.push({ ...common, type: "blank_choice", key,
+              answers: [options[index] || key],
+              questionIndex: Number.parseInt(node.getAttribute("index"), 10) || null });
+          } else {
+            const letter = key.toUpperCase();
+            if (!/^[A-Z]$/.test(letter)) return;
+            const options = Array.from(node.querySelectorAll("li"),
+              (li) => li.textContent.trim());
+            const index = letter.charCodeAt(0) - 65;
+            results.push({ ...common, type: "single", key: letter,
+              answers: [options[index] || letter],
+              questionIndex: Number.parseInt(node.getAttribute("index"), 10) || null });
+          }
+        } else if (node.tagName === "ET-BLANK") {
+          const raw = node.textContent.trim();
+          const answers = raw.split("|").map((value) => value.trim()).filter(Boolean);
+          if (answers.length) results.push({ ...common, type: "fill", answers });
+        } else if (node.tagName === "ET-TOF") {
+          const key = node.getAttribute("key")?.trim().toUpperCase();
+          if (key === "T" || key === "F") {
+            results.push({ ...common, type: "tof", key,
+              answers: [key === "T" ? "True" : "False"] });
+          }
         }
-
-        const idxMatch = attrs.match(/index\s*=\s*"([^"]*)"/);
-        results.push({
-          answers: [answer],
-          type: type,
-          key: key,
-          questionText: direction,
-          tabName: currentTabName,
-          questionIndex: idxMatch ? parseInt(idxMatch[1]) : null,
-        });
-      }
-
-      // et-blank：填空（有/无属性均匹配，支持 | 分隔的多答案）
-      const blankRegex =
-        /<et-blank(?:\s+[^>]*)?>([\s\S]*?)<\/et-blank>/g;
-      let bm;
-      while ((bm = blankRegex.exec(section)) !== null) {
-        const raw = bm[1].replace(/<[^>]+>/g, "").trim();
-        if (raw) {
-          results.push({
-            answers: raw.split("|").map((s) => s.trim()).filter(Boolean),
-            type: "fill",
-            questionText: direction,
-            tabName: currentTabName,
-          });
-        }
-      }
-
-      // et-tof：判断题 True/False
-      const tofRegex = /<et-tof\s+([^>]*?)>/g;
-      let tm;
-      while ((tm = tofRegex.exec(section)) !== null) {
-        const attrs = tm[1];
-        const keyMatch = attrs.match(/key\s*=\s*"([TF])"/i);
-        if (!keyMatch) continue;
-        const key = keyMatch[1].toUpperCase();
-        results.push({
-          answers: [key === "T" ? "True" : "False"],
-          type: "tof",
-          key: key,
-          questionText: direction,
-          tabName: currentTabName,
-        });
-      }
-    }
+      });
+    });
 
     return results;
+  }
+
+  // 按题目与参考区块配对；参考文本并不以录音控件为前提。
+  function parseReferenceExercises(html) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const references = [];
+    const pageInstruction = doc.querySelector("et-direction")?.textContent.trim() || "";
+
+    doc.querySelectorAll("et-reveal").forEach((reveal) => {
+      const item = reveal.closest("et-stem li, et-question, .question, .exercise-item") ||
+        reveal.parentElement;
+      if (!item) return;
+      const promptNode = item.querySelector(":scope > p, :scope > et-question, :scope > .prompt");
+      const question = promptNode?.textContent.trim() || Array.from(item.children)
+        .filter((child) => child !== reveal && !child.contains(reveal) &&
+          !child.matches("et-recorder, et-choice, et-blank, et-tof, input, textarea, button"))
+        .map((child) => child.textContent.trim()).find(Boolean) || "";
+      if (!question) return;
+      const listed = Array.from(reveal.querySelectorAll("li"));
+      const examples = (listed.length ? listed :
+        Array.from(reveal.querySelectorAll("p"))).map((node) => node.textContent.trim())
+        .filter(Boolean);
+      if (!examples.length && reveal.textContent.trim()) examples.push(reveal.textContent.trim());
+      if (!examples.length) return;
+      const instruction = item.closest("tab")?.querySelector("et-direction")
+        ?.textContent.trim() || pageInstruction;
+      references.push({
+        type: "open_ended", title: "问题 " + (references.length + 1), instruction,
+        prompts: [question], lines: examples,
+      });
+    });
+
+    doc.querySelectorAll("et-follow-me").forEach((exercise) => {
+      const lines = exercise.textContent.split("|").map((line) => line.trim()).filter(Boolean);
+      if (lines.length) references.push({
+        type: "read_aloud", title: "跟读参考文本", instruction: pageInstruction,
+        prompts: lines.slice(), lines,
+      });
+    });
+
+    const titles = Array.from(doc.querySelectorAll("ul[header] > li"),
+      (li) => li.textContent.trim());
+    doc.querySelectorAll("et-talk").forEach((exercise, index) => {
+      const lines = Array.from(exercise.querySelectorAll("flow"), (flow) => ({
+        role: flow.getAttribute("role") || "",
+        text: flow.textContent.trim(),
+      })).filter((line) => line.text);
+      if (lines.length) references.push({
+        type: "role_play",
+        title: titles[index] || "对话 " + (index + 1),
+        instruction: pageInstruction,
+        prompts: lines.filter((line) => /[?？]/.test(line.text))
+          .map((line) => ({ role: line.role, text: line.text })),
+        lines,
+      });
+    });
+    return references;
   }
 
   // ======================== DOM 自动填入 ========================
@@ -265,7 +274,22 @@
 
     answerList.forEach((a, i) => {
       try {
-        if (a.type === "single") {
+        if (a.type === "multiple") {
+          if (choiceIdx >= allChoiceOLs.length) return;
+          const ol = allChoiceOLs[choiceIdx++];
+          if (!ol.querySelectorAll) return;
+          const lis = ol.querySelectorAll("li");
+          let clicked = 0;
+          for (const index of a.indexes) {
+            if (lis[index]) {
+              lis[index].click();
+              clicked++;
+            }
+          }
+          if (clicked === a.indexes.length) {
+            results.push({ i, type: "multi_click", indexes: a.indexes, ok: true });
+          }
+        } else if (a.type === "single") {
           if (choiceIdx >= allChoiceOLs.length) return;
           const ol = allChoiceOLs[choiceIdx];
           const idx = a.key.toUpperCase().charCodeAt(0) - 65;
@@ -355,29 +379,30 @@
 
   async function getAnswers() {
     const info = extractPageInfo();
+    const observed = observedDataUrls();
+    const expectedPath = info.dataUrl ? new URL(info.dataUrl).pathname : null;
+    const sameRoute = expectedPath ? observed.filter((url) =>
+      new URL(url).pathname === expectedPath) : [];
+    // SPA 可能保留上一课件/课程的 Performance 记录，绝不能拿旧答案兜底。
+    const urls = [...new Set([...sameRoute, info.dataUrl].filter(Boolean))];
+    if (!urls.length) throw new Error("未定位到 WE Learn 课程数据请求；请打开具体练习页");
 
-    if (!info.dataUrl) {
-      console.error("[welearn-api] 无法推导数据 HTML URL");
-      return null;
+    let lastError = null;
+    for (const url of urls) {
+      try {
+        const html = await fetchDataHtml(url);
+        const answers = parseAnswers(html);
+        const references = parseReferenceExercises(html);
+        if (answers.length || references.length) {
+          return { info, answers, references, sourceUrl: url };
+        }
+      } catch (error) {
+        lastError = error;
+      }
     }
-
-    console.log("[welearn-api] 数据URL:", info.dataUrl);
-
-    const html = await fetchDataHtml(info.dataUrl);
-    if (!html) {
-      console.error("[welearn-api] 抓取数据 HTML 失败");
-      return null;
-    }
-
-    const answers = parseAnswers(html);
-    console.log(
-      "[welearn-api] 解析到",
-      answers.length,
-      "个答案:",
-      answers.map((a) => a.type + ":" + (a.answers[0] || "").substring(0, 20)).join(", ")
-    );
-
-    return { info, answers };
+    throw new Error(lastError ?
+      "课程数据未包含可解析的正解（" + lastError.message + "）" :
+      "课程数据未包含可解析的正解；需核对当前课程 Network 响应格式");
   }
 
   // ======================== 导出 ========================
@@ -387,6 +412,8 @@
     extractPageInfo,
     fetchDataHtml,
     parseAnswers,
+    parseReferenceExercises,
+    parseRecordingReferences: parseReferenceExercises,
     autoFillAnswers,
     getAnswers,
   };

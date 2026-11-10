@@ -18,7 +18,7 @@
 | U校园 (Unipus) | API 直取 + 模板扫描 | ~100% |
 | 问卷星 (WJX) | 模板扫描 + AI | 高 |
 | 腾讯问卷 | 模板扫描 + AI | 高 |
-| WE Learn | 数据 HTML 解析 | ~100% |
+| WE Learn | 课程资源 HTML 解析（依课程格式） | 不保证覆盖所有课程 |
 | 其他站点 | AI 分析 | 依赖模型 |
 
 ## 下载与安装
@@ -73,6 +73,16 @@ git clone https://github.com/yuanarcsin/unipus_auto.git
 3. 调用 `/course/api/v3/answer/...` 接口获取加密答案
 4. AES-128-ECB 解密后填入页面
 
+### WE Learn 课程资源
+
+在 WE Learn 具体练习页点击面板的「自动答题」。扩展优先在课程 iframe 中读取同源资源；若课程资源明确包含答案标记，会解析并填入对应客观题，但不会自动提交。
+
+带 `et-reveal` 的参考文本题不一定需要录音：扩展按题目配对参考表达，提取问题并可调用 DeepSeek 生成可照读的英语示例。`et-follow-me` 直接展示跟读原文，`et-talk` 展示 A/B 对话稿。参考文本与 AI 示例都不是固定评分答案；这些题不会被自动填答、录音或提交。若同页还有带 key 的客观题，仍按原有逻辑处理。
+
+在「AI 模型管理」编辑内置 DeepSeek 配置，填写自己的 API Key。默认使用 `https://api.deepseek.com` 和 `deepseek-flash`，通过 Chat Completions 的 JSON 输出生成示例；未配置密钥时仍会展示题目和课程参考文本。不要把浏览器 Cookie 当成 DeepSeek API Key。
+
+若提示「课程数据未包含可解析的正解」，说明该课程的资源路径或响应格式需要重新核对。请导出该练习页的浏览器 Network HAR，并先删除 Cookie、Authorization、账号、姓名等敏感信息；不要把原始登录 Cookie 写入扩展、仓库或公开 issue。
+
 ## 配置说明
 
 ### AI 模型设置
@@ -83,7 +93,7 @@ git clone https://github.com/yuanarcsin/unipus_auto.git
 |------|------|
 | API Base URL | API 服务地址，如 `https://api.openai.com/v1` |
 | API Key | 调用密钥 |
-| 模型名 | 如 `gpt-4o`、`deepseek-chat` 等 |
+| 模型名 | 如 `gpt-4o`；官方 DeepSeek 默认使用 `deepseek-flash` |
 
 ### 站点模板
 

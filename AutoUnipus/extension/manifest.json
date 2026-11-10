@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI自动答题助手",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "智能识别网页题目，通过AI自动答题",
   "permissions": [
     "activeTab",

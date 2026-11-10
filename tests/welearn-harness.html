@@ -1,0 +1,129 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WE Learn parser smoke test</title>
+<pre id="result">PENDING</pre>
+<script>
+  const tabFixture = '<ul header><li>Unit 1</li></ul><tab>' +
+    '<et-direction>Pick an answer</et-direction>' +
+    '<et-choice key="B" index="1"><ol><li>One</li><li>Two</li></ol></et-choice>' +
+    '<et-blank>hello|hi</et-blank><et-tof key="F"></et-tof></tab>';
+  // 当前课程 Listening Strategy 的结构：et-direction 在 et-stem 外，且没有 <tab>。
+  const fixture = '<et-item><et-direction>Listen and choose</et-direction><et-stem>' +
+    '<et-choice key="c"><ol><li>A</li><li>B</li><li>C</li><li>D</li></ol></et-choice>' +
+    '<et-choice key="d"><ol><li>A</li><li>B</li><li>C</li><li>D</li></ol></et-choice>' +
+    '</et-stem></et-item>';
+  const mixedFixture = '<et-tab><ul header><li>Word Bank</li><li>Exercise 1</li>' +
+    '<li>Exercise 2</li></ul><tab></tab><tab><et-stem>' +
+    '<et-choice key="1,3" multi><ol><li>A</li><li>B</li><li>C</li></ol></et-choice>' +
+    '</et-stem></tab><tab><et-stem>' +
+    '<et-choice key="d"><ol><li>A</li><li>B</li><li>C</li><li>D</li></ol></et-choice>' +
+    '</et-stem></tab></et-tab>';
+  const recordingFixture = '<et-item><et-follow-me>Read one.|Read two.</et-follow-me>' +
+    '<et-tab><ul header><li>Conversation 1</li></ul><tab><et-talk>' +
+    '<flow role="A">Hello.</flow><flow role="B">Hi.</flow>' +
+    '</et-talk></tab></et-tab></et-item>';
+  const openEndedFixture = '<et-item><et-direction>Answer the questions.</et-direction>' +
+    '<et-stem><ol><li><p>When were you sick?</p><et-recorder></et-recorder>' +
+    '<et-reveal><ul><li><p>I had a cold last month.</p></li></ul></et-reveal></li>' +
+    '<li><p>Did you see a doctor?</p><et-recorder></et-recorder>' +
+    '<et-reveal><ul><li><p>Yes, I did.</p></li></ul></et-reveal></li></ol></et-stem></et-item>';
+  // 同样的参考区块可以用于文字题；不应依赖 et-recorder 判断题型。
+  const textReferenceFixture = '<et-item><et-direction>Write a short response.</et-direction>' +
+    '<et-stem><ol><li><p>How do you stay healthy?</p><textarea></textarea>' +
+    '<et-reveal><p>I exercise regularly.</p></et-reveal></li>' +
+    '<li><div class="prompt">What helps you sleep?</div><input>' +
+    '<et-reveal><ul><li>Reading before bed helps me relax.</li></ul></et-reveal></li>' +
+    '</ol></et-stem></et-item>';
+  const mixedReferenceFixture = '<et-item><et-direction>Complete the tasks.</et-direction>' +
+    '<et-stem><et-choice key="A"><ol><li>Yes</li><li>No</li></ol></et-choice>' +
+    '<ol><li><p>Why do you agree?</p><et-reveal><p>It benefits everyone.</p>' +
+    '</et-reveal></li></ol></et-stem></et-item>';
+  let responseFixture = fixture;
+  let sentUrl = null;
+  window.chrome = { runtime: { sendMessage(message, callback) {
+    sentUrl = message.url;
+    callback({ success: true, data: responseFixture });
+  } } };
+  const iframe = document.createElement('iframe');
+  iframe.loading = 'lazy';
+  iframe.style.display = 'none';
+  iframe.src = 'https://centercourseware.sflep.com/New Advanced College English-Listening and Speaking Course 2/index.html#/4/1-1';
+  const querySelectorAll = document.querySelectorAll.bind(document);
+  document.querySelectorAll = (selector) => selector === 'iframe[src]' ?
+    [iframe] : querySelectorAll(selector);
+</script>
+<script src="../AutoUnipus/extension/modules/welearn-api.js"></script>
+<script>
+  (async () => {
+    const expectedUrl = 'https://centercourseware.sflep.com/New%20Advanced%20College%20English-Listening%20and%20Speaking%20Course%202/data/4/1-1.html';
+    const info = welearnAPI.extractPageInfo();
+    if (info.dataUrl !== expectedUrl) throw Error('wrong data URL: ' + info.dataUrl);
+    const answers = welearnAPI.parseAnswers(tabFixture);
+    if (answers.length !== 3) throw Error('wrong tabbed answer count: ' + answers.length);
+    if (answers.map((item) => item.type).join(',') !== 'single,fill,tof') {
+      throw Error('wrong answer order');
+    }
+    if (answers[0].answers[0] !== 'Two' || answers[1].answers[0] !== 'hello' ||
+        answers[2].answers[0] !== 'False') throw Error('wrong answer values');
+    const bareAnswers = welearnAPI.parseAnswers(fixture);
+    if (bareAnswers.length !== 2 || bareAnswers[0].key !== 'C' ||
+        bareAnswers[1].key !== 'D') throw Error('no-tab second exercise not parsed');
+    const mixedAnswers = welearnAPI.parseAnswers(mixedFixture);
+    if (mixedAnswers.length !== 2 || mixedAnswers[0].type !== 'multiple' ||
+        mixedAnswers[0].indexes.join(',') !== '0,2' ||
+        mixedAnswers[0].tabName !== 'Exercise 1' ||
+        mixedAnswers[1].tabName !== 'Exercise 2') {
+      throw Error('Unit 4 mixed tabs not parsed');
+    }
+    const references = welearnAPI.parseRecordingReferences(recordingFixture);
+    if (welearnAPI.parseAnswers(recordingFixture).length !== 0 ||
+        references.length !== 2 || references[0].lines.join(',') !== 'Read one.,Read two.' ||
+        references[1].title !== 'Conversation 1' ||
+        references[1].lines[1].role !== 'B' || references[1].lines[1].text !== 'Hi.') {
+      throw Error('recording reference extraction failed');
+    }
+    const openEnded = welearnAPI.parseReferenceExercises(openEndedFixture);
+    if (openEnded.length !== 2 || openEnded[0].prompts[0] !== 'When were you sick?' ||
+        openEnded[0].lines[0] !== 'I had a cold last month.' ||
+        openEnded[1].prompts[0] !== 'Did you see a doctor?') {
+      throw Error('open-ended question/reference pairing failed');
+    }
+    const textReferences = welearnAPI.parseReferenceExercises(textReferenceFixture);
+    if (textReferences.length !== 2 ||
+        textReferences[0].prompts[0] !== 'How do you stay healthy?' ||
+        textReferences[0].lines[0] !== 'I exercise regularly.' ||
+        textReferences[1].prompts[0] !== 'What helps you sleep?' ||
+        textReferences[1].lines[0] !== 'Reading before bed helps me relax.') {
+      throw Error('non-recording reference pairing failed');
+    }
+    if (welearnAPI.parseAnswers(mixedReferenceFixture).length !== 1 ||
+        welearnAPI.parseReferenceExercises(mixedReferenceFixture).length !== 1) {
+      throw Error('mixed keyed/reference exercise extraction failed');
+    }
+    const result = await welearnAPI.getAnswers();
+    if (result.answers.length !== 2 || result.answers[1].key !== 'D' ||
+        sentUrl !== expectedUrl) {
+      throw Error('background request not used');
+    }
+    responseFixture = recordingFixture;
+    iframe.src = 'https://centercourseware.sflep.com/New Advanced College English-Listening and Speaking Course 2/index.html#/4/2-4';
+    const recordingResult = await welearnAPI.getAnswers();
+    if (recordingResult.answers.length !== 0 || recordingResult.references.length !== 2) {
+      throw Error('recording resource was not returned read-only');
+    }
+    responseFixture = openEndedFixture;
+    iframe.src = 'https://centercourseware.sflep.com/New Advanced College English-Listening and Speaking Course 2/index.html#/4/2-1';
+    const openEndedResult = await welearnAPI.getAnswers();
+    if (openEndedResult.answers.length !== 0 || openEndedResult.references.length !== 2) {
+      throw Error('open-ended resource was not returned');
+    }
+    responseFixture = textReferenceFixture;
+    const textResult = await welearnAPI.getAnswers();
+    if (textResult.answers.length !== 0 || textResult.references.length !== 2) {
+      throw Error('non-recording reference resource was not returned');
+    }
+    document.getElementById('result').textContent = 'PASS';
+  })().catch((error) => {
+    document.getElementById('result').textContent = 'FAIL: ' + error.message;
+  });
+</script>

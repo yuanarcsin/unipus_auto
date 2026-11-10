@@ -344,6 +344,29 @@ body {
 .log-error .log-msg { color: var(--danger); }
 .log-warning .log-msg { color: var(--warning); }
 
+.recording-panel[hidden] { display: none; }
+.recording-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--bg-card);
+}
+.recording-note {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 8px 0;
+}
+.recording-content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 13px/1.65 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--text-main);
+  max-height: 55vh;
+  overflow-y: auto;
+  user-select: text;
+}
+
 /* Modal Settings */
 .modal {
   position: absolute;

@@ -2,18 +2,26 @@
   "siteId": "welearn",
   "siteName": "WE Learn (外教社)",
   "urlPatterns": [
+    "*://welearn.sflep.com/*",
     "*://centercourseware.sflep.com/*"
   ],
-  "urlRegex": "^https?://centercourseware\\.sflep\\.com/",
-  "version": "1.0.0",
+  "urlRegex": "^https?://(?:welearn|centercourseware)\\.sflep\\.com/",
+  "version": "1.1.0",
   "createdAt": "2026-05-28",
-  "description": "WE Learn 随行课堂。题目在 centercourseware.sflep.com iframe 中，正确答案嵌入数据 HTML 的 et-choice key / et-blank 文本中。",
+  "description": "WE Learn 主页面及课程内容 iframe。解析课程资源中的明确答案标记，并配对参考文本题；课程数据以当前页面实际网络请求为准。",
   "selectors": {
-    "questionContainer": "et-stem et-choice, et-stem et-blank, et-stem ol > li",
+    "questionContainer": "et-stem et-choice, et-stem et-blank",
     "questionTypes": {
       "detectByAttribute": false,
+      "blank_choice": {
+        "container": "et-choice[join]",
+        "title": "et-direction, p",
+        "optionInput": "span",
+        "optionLabel": "span",
+        "clickTarget": "span"
+      },
       "single_choice": {
-        "container": "et-choice",
+        "container": "et-choice:not([join])",
         "title": "p, et-direction",
         "optionInput": "li",
         "optionLabel": "li",
@@ -21,12 +29,8 @@
       },
       "fill_blank": {
         "container": "et-blank",
-        "inputs": "input[type='text']"
-      },
-      "blank_choice": {
-        "container": "et-choice[join]",
-        "optionInput": "span",
-        "clickTarget": "span"
+        "title": "et-direction, p",
+        "inputs": "input[type='text'], textarea, [contenteditable='true']"
       }
     }
   },
@@ -42,5 +46,5 @@
     "answerSource": "dataHtml",
     "tabbedContent": true
   },
-  "notes": "正确答案嵌入在数据 HTML 文件中（data/{unit}/{section}.html），通过 et-choice key 属性和 et-blank 文本内容获取。不需要 API 调用。"
+  "notes": "课程资源可能在 data/{unit}/{section}.html 中提供 et-choice key / et-blank，也可能用 et-reveal 提供非唯一参考表达；后者仅展示与生成示例，不自动填答。若资源格式变化，需以 Network 抓包核对。"
 }
